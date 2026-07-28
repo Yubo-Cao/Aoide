@@ -25,6 +25,7 @@ class UnixSocketServer:
         self.on_toggle: Optional[Callable] = None
         self.on_config: Optional[Callable] = None
         self.on_reset: Optional[Callable] = None
+        self.on_commit_now: Optional[Callable] = None  # ★ commit_now 回调
 
     async def serve(self):
         self._running = True
@@ -57,13 +58,14 @@ class UnixSocketServer:
 
                 data = await reader.readexactly(msg_len)
                 await self._process_message(data, writer)
+            logger.info(f"Client handler exiting: self._running=False")
 
-        except asyncio.IncompleteReadError:
-            pass
-        except ConnectionResetError:
-            pass
+        except asyncio.IncompleteReadError as e:
+            logger.info(f"Client handler: IncompleteReadError (client closed): {e}")
+        except ConnectionResetError as e:
+            logger.info(f"Client handler: ConnectionResetError: {e}")
         except Exception as e:
-            logger.error(f"Client handler error: {e}")
+            logger.error(f"Client handler error: {e}", exc_info=True)
         finally:
             self._clients.discard(writer)
             writer.close()
@@ -122,7 +124,11 @@ class UnixSocketServer:
 
             elif msg_type == "commit_now":
                 logger.debug("Command: commit_now")
-                await self.broadcast({"type": "commit"})
+                # ★ 通过回调让 pipeline 真正 commit buffer 内容
+                if self.on_commit_now:
+                    await self.on_commit_now()
+                else:
+                    await self.broadcast({"type": "commit"})
 
             elif msg_type == "optimize_now":
                 logger.debug("Command: optimize_now")
@@ -148,7 +154,16 @@ class UnixSocketServer:
             logger.warning(f"broadcast {message.get('type')}: no clients connected")
             return
 
-        logger.info(f"broadcast {message.get('type')}: {str(message.get('text',''))[:40]} to {len(self._clients)} client(s)")
+        if message.get('type') == 'preedit':
+            # preedit uses green/yellow/red keys, not 'text'
+            total = (len(message.get('green', '')) +
+                     len(message.get('yellow', '')) +
+                     len(message.get('red', '')))
+            logger.info(f"broadcast preedit: {total} chars "
+                        f"({len(message.get('green', ''))}/{len(message.get('yellow', ''))}/{len(message.get('red', ''))}) "
+                        f"to {len(self._clients)} client(s)")
+        else:
+            logger.info(f"broadcast {message.get('type')}: {str(message.get('text', ''))[:40]} to {len(self._clients)} client(s)")
 
         disconnected = set()
         for client in self._clients:

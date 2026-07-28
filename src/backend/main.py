@@ -23,6 +23,7 @@ from backend.asr_engine import ASREngine
 from backend.llm_optimizer import LLMOptimizer
 from backend.audio_capture import AudioCapture
 from backend.unix_server import UnixSocketServer
+from backend.pipeline_v3 import PTTPipelineV3
 
 logger = logging.getLogger("yuhuang")
 
@@ -204,237 +205,11 @@ def main():
         frame_size=audio_config.get("frame_size", 4800),
         device=audio_config.get("device", None) or None,
     )
+    # ---- Server setup ----
+    server = UnixSocketServer(socket_path)
 
-    # ---- PTT 流式管道: 三层流水线 ----
-
-    class PTTStreamPipeline:
-        """PTT 语音识别流水线:
-
-        流式模型 (paraformer-zh-streaming): 实时预览，不参与上屏决策
-        离线模型 (SenseVoiceSmall):    权威文本，连续两次结果 LCP=稳定→上屏
-        候选框:                          仅显示未稳定尾巴（≤200字）
-
-        设计理念:
-        - 流式模型精度有限，仅用于预览
-        - 离线纠正连续两次 LCP 前缀 = 已稳定 → 提交上屏
-        - 候选框只保留最近不稳定部分，长语音不堆积
-        - 松键时 SenseVoiceSmall 最终结果提交全部剩余
-        """
-
-        MIN_STABLE_LEN = 3      # 最小稳定前缀长度（连续两次离线结果LCP≥此值才提交）
-        CANDIDATE_WARN = 500    # 候选框超过此长度输出告警（帮助判断离线纠正频率是否够）
-
-        def __init__(self):
-            self.reset()
-
-        def reset(self):
-            self._raw = ""               # 当前最佳文本
-            self._committed_text = ""    # 已上屏文本内容（用于去重）
-            self._prev_text = ""         # 上一次流式中间结果（防重复）
-            self._prev_offline_text = "" # 上一次离线纠正文本（用于LCP稳定性检测）
-            self._offline_gen = -1       # 最新离线结果版本号
-            self._offline_len = 0        # 最新离线文本长度
-            self._done = False
-            # LCP 双重确认：防止单次大跨度跳涨直接提交
-            self._prev_lcp_above = False
-
-        async def on_intermediate(self, text: str):
-            """流式模型中间结果 → 仅更新候选框预览，不上屏"""
-            if not text:
-                return
-            self._apply_text(text)
-
-        async def on_offline_correction(self, text: str, generation: int):
-            """离线模型纠正结果 → LCP 判定稳定性 → 提交 + 候选框"""
-            if not text or generation <= self._offline_gen:
-                return
-            self._offline_gen = generation
-            self._offline_len = len(text)
-
-            logger.info(
-                f"PTT pipeline: offline correction "
-                f"(#{generation}, {len(text)} chars): {text[:80]}..."
-            )
-
-            # ── LCP 稳定性判定 ──
-            # 首次纠正仅设基线不上屏，后续每次与前次对比 LCP。
-            # ★ 双重确认：要求连续两次离线纠正的 LCP 都超过 committed 才提交
-            # 防止模型剧烈修订后单次 LCP 跳涨就提交大段文本
-            if not self._prev_offline_text:
-                # 首次纠正：仅设基线，不提交
-                self._prev_offline_text = text
-                logger.info(
-                    "PTT pipeline: first correction, setting baseline "
-                    f"({len(text)} chars), no commit yet"
-                )
-            else:
-                lcp = 0
-                max_lcp = min(len(text), len(self._prev_offline_text))
-                while lcp < max_lcp and text[lcp] == self._prev_offline_text[lcp]:
-                    lcp += 1
-
-                logger.info(
-                    f"PTT pipeline: LCP(prev, current) = {lcp}, "
-                    f"committed={self._committed_len}"
-                )
-
-                # 模型修订早期文本 → committed_len 来自实际已提交文字，不回退
-                # 只是 LCP 暂时小于已提交长度，继续等 LCP 追上来
-                if lcp <= self._committed_len:
-                    logger.info(
-                        f"PTT pipeline: model still revising, "
-                        f"LCP={lcp} <= committed={self._committed_len}, "
-                        f"waiting for stability"
-                    )
-                    self._prev_lcp_above = False
-                else:
-                    new_stable = text[self._committed_len:lcp]
-                    if len(new_stable.strip()) >= self.MIN_STABLE_LEN:
-                        # ★ 双重确认：要求连续两次离线纠正的 LCP 都超过 committed
-                        # 防止模型剧烈修订后单次 LCP 跳涨就提交大段文本
-                        if self._prev_lcp_above:
-                            await self._try_commit(new_stable.strip())
-                            self._prev_lcp_above = (
-                                lcp > self._committed_len
-                            )  # 提交后 committed 已增长，重新判定
-                        else:
-                            logger.info(
-                                f"PTT pipeline: LCP recovered ({lcp} > "
-                                f"{self._committed_len}), "
-                                f"awaiting next confirmation"
-                            )
-                            self._prev_lcp_above = True
-                    else:
-                        self._prev_lcp_above = True
-
-                self._prev_offline_text = text
-
-            # ── 候选框：未稳定尾巴，长度由 LCP 自然决定 ──
-            candidate = text[self._committed_len:]
-            if candidate:
-                if len(candidate) > self.CANDIDATE_WARN:
-                    logger.warning(
-                        f"Candidate box large: {len(candidate)} chars "
-                        f"(offline corrections may be too slow)"
-                    )
-                await self._show(candidate)
-
-        def _apply_text(self, text: str):
-            """流式中间结果：仅更新 _raw 和候选框预览。
-
-            不参与上屏决策。上屏由 on_offline_correction（LCP稳定性）负责。
-            """
-            if text == self._prev_text:
-                return
-
-            self._raw = text
-            self._prev_text = text
-
-            # 候选框：未上屏部分，长度由 LCP 稳定性自然决定
-            committed_len = len(self._committed_text)
-            candidate = text[committed_len:] if committed_len < len(text) else ""
-            if candidate:
-                if len(candidate) > self.CANDIDATE_WARN:
-                    logger.warning(
-                        f"Candidate box large: {len(candidate)} chars "
-                        f"(offline corrections may be too slow)"
-                    )
-                asyncio.create_task(self._show(candidate))
-
-        async def _try_commit(self, text: str):
-            """提交文本（带去重：已上屏部分不重复提交）"""
-            if not text or not text.strip():
-                return
-            text = text.strip()
-
-            # 去重：找出与已提交文本不重叠的部分
-            commit_text = text
-            if self._committed_text:
-                # 找后缀重叠：committed_text 尾部 = commit_text 头部
-                max_ol = min(len(self._committed_text), len(text))
-                for ol in range(max_ol, 0, -1):
-                    if self._committed_text.endswith(text[:ol]):
-                        commit_text = text[ol:]
-                        break
-                if not commit_text.strip():
-                    return  # 完全重叠，跳过
-
-            if llm_optimizer:
-                try:
-                    refined = await llm_optimizer.optimize(commit_text)
-                    if refined:
-                        commit_text = refined
-                except Exception:
-                    pass
-
-            await self._commit(commit_text)
-            self._committed_text += commit_text
-
-        @property
-        def _committed_len(self):
-            return len(self._committed_text)
-
-        async def finalize(self):
-            """松开按键：最后一次离线纠正 + 提交全部剩余"""
-            self._done = True
-
-            # 获取最佳文本: 优先离线纠正，否则流式累积
-            if asr_engine:
-                offline_text, _ = asr_engine.get_offline_text()
-                if offline_text:
-                    self._raw = offline_text
-                else:
-                    self._raw = asr_engine.get_accumulated_text() or self._raw
-
-            # 最后一次离线 ASR（带标点恢复）
-            if asr_engine and self._raw:
-                try:
-                    final_raw = await asr_engine.finalize()
-                    if final_raw and final_raw.strip():
-                        self._raw = final_raw.strip()
-                except Exception as e:
-                    logger.warning(f"Final offline ASR failed: {e}")
-
-            # 提交所有未上屏内容（带去重）
-            committed_len = len(self._committed_text)
-            remaining = self._raw[committed_len:] if committed_len < len(self._raw) else ""
-            if remaining and remaining.strip():
-                remaining = remaining.strip()
-                # 去重
-                if self._committed_text:
-                    max_ol = min(len(self._committed_text), len(remaining))
-                    for ol in range(max_ol, 0, -1):
-                        if self._committed_text.endswith(remaining[:ol]):
-                            remaining = remaining[ol:]
-                            break
-                if remaining and remaining.strip():
-                    if llm_optimizer:
-                        try:
-                            refined = await llm_optimizer.optimize(remaining)
-                            if refined:
-                                remaining = refined
-                        except Exception:
-                            pass
-                    await server.broadcast({"type": "final", "text": remaining})
-                    await self._commit(remaining)
-            else:
-                # ★ 无剩余文本时也要清除候选框（防止 preedit 残留）
-                await server.broadcast({"type": "reset"})
-
-            self.reset()
-
-        async def _show(self, text: str):
-            if server and text:
-                logger.info(f"BROADCAST intermediate: {text[:60]}...")
-                await server.broadcast({"type": "intermediate", "text": text})
-
-        async def _commit(self, text: str):
-            if server and text and text.strip():
-                logger.info(f"BROADCAST commit: {text[:60]}...")
-                await server.broadcast({"type": "commit", "text": text.strip()})
-
-
-    _pipeline = PTTStreamPipeline()
+    # ---- PTT 流式管道 v3.0 ----
+    _pipeline = PTTPipelineV3(server, llm_optimizer)
 
     # ---- Callbacks ----
 
@@ -456,21 +231,36 @@ def main():
         asr_engine.set_intermediate_callback(on_asr_intermediate)
         asr_engine.set_offline_callback(on_asr_offline)
 
-    # ---- Server setup ----
-    server = UnixSocketServer(socket_path)
-
     # PTT handlers
     async def on_start_listening():
         audio_capture.start_listening()
         _pipeline.reset()
         if asr_engine:
             asr_engine.reset()
+            # ★ 重新启动 ASR 后台处理（on_stop_listening 会停掉它）
+            if not asr_engine._processing_task:
+                asr_engine.start_processing()
+            # ★ 绑定 trim 回调：commit 时裁剪已提交音频
+            _pipeline.buffer._trim_audio_callback = asr_engine.trim_committed_audio
         if server:
             await server.broadcast({"type": "reset"})
 
     async def on_stop_listening():
         audio_capture.stop_listening()
+        # ★ 等待最后一次离线纠正完成（小步轮询，完成即走，不固定睡 0.5s）
+        if asr_engine:
+            for _ in range(12):  # 最多 0.6s
+                if not asr_engine._offline_busy:
+                    break
+                await asyncio.sleep(0.05)
+            # ★ v3.8.6 尾部音频补刀：流式解码有延迟，松键太快时尾巴
+            # 音频还没进过文本（实录："怎么样"只上屏到"怎"）
+            await asr_engine.flush_final_offline()
         await _pipeline.finalize()
+        # ★ 立即停止 ASR 后台任务，防止空转
+        # 下次 on_start_listening 时重新启动
+        if asr_engine:
+            await asr_engine.stop_processing()
 
     async def on_toggle():
         if audio_capture.is_listening:
@@ -481,6 +271,10 @@ def main():
     async def on_reset():
         if asr_engine:
             asr_engine.reset()
+
+    async def on_commit_now():
+        """回车键强制提交当前 buffer 内容"""
+        await _pipeline.commit_now()
 
     async def on_config(cmd: dict):
         """Handle config update from fcitx5 plugin (LLM + audio device)"""
@@ -518,6 +312,11 @@ def main():
             )
             logger.info("LLM optimizer config updated from fcitx5 GUI")
 
+        # ★ 同步给运行中的 pipeline：更新 optimizer 引用 + 绿区开关
+        _pipeline.llm_optimizer = llm_optimizer
+        _pipeline.buffer.set_llm_enabled(llm_optimizer is not None)
+        logger.info(f"Pipeline LLM enabled: {llm_optimizer is not None} (green zone {'on' if llm_optimizer else 'off'})")
+
         # Hot-swap audio device
         new_device = cmd.get("audio_device", "")
         old_device = audio_capture.device or ""
@@ -530,6 +329,7 @@ def main():
     server.on_stop_listening = on_stop_listening
     server.on_toggle = on_toggle
     server.on_reset = on_reset
+    server.on_commit_now = on_commit_now
     server.on_config = on_config
 
     # ---- Event loop ----
@@ -555,6 +355,11 @@ def main():
         # ★ 启动 ASR 后台处理循环（必须在 event loop 运行后）
         if asr_engine:
             asr_engine.start_processing()
+            # ★ 绑定 trim 回调：commit 时裁剪已提交音频
+            _pipeline.buffer._trim_audio_callback = asr_engine.trim_committed_audio
+
+        # ★ 启动防卡死定时器
+        _pipeline.start_emergency_timer()
 
         # ★ 内存守护进程（独立子进程，硬限制）
         _watchdog_proc = None
@@ -602,6 +407,7 @@ def main():
         await stop_event.wait()
 
         logger.info("Shutting down...")
+        _pipeline.stop_emergency_timer()
         await audio_capture.stop()
         server.stop()
         if asr_engine:

@@ -9,6 +9,7 @@
 #include <fcitx-config/configuration.h>
 #include <fcitx-config/option.h>
 #include <string>
+#include <vector>
 #include <memory>
 #include <thread>
 #include <mutex>
@@ -130,7 +131,8 @@ public:
     bool sendCommand(const std::string &command);
 
     using ResultCallback = std::function<void(const std::string &type,
-                                              const std::string &text)>;
+                                              const std::string &text,
+                                              const std::string &raw_msg)>;
     void setResultCallback(ResultCallback callback);
 
     void startReceiveLoop();
@@ -151,6 +153,12 @@ private:
     bool sendRaw(const uint8_t *data, size_t len);
 };
 
+// ===== 候选框分段（v3.0 三色渲染）=====
+struct TextSegment {
+    std::string text;
+    std::string style;  // "green" | "yellow" | "red" | "gray"
+};
+
 // ===== 每个 InputContext 的状态 =====
 class YuHuangState : public fcitx::InputContextProperty {
 public:
@@ -158,6 +166,7 @@ public:
     ~YuHuangState();
 
     void updatePreedit(const std::string &text);
+    void updatePreedit(const std::vector<TextSegment> &segments);
     void commitText(const std::string &text);
     void reset();
 

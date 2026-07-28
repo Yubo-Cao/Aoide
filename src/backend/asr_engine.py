@@ -90,6 +90,10 @@ class ASREngine:
         # ★ 修复: 流式解码状态 (跨多次 _transcribe_partial 调用保持)
         self._stream_cache = {}          # FunASR streaming cache
         self._stream_audio_offset = 0    # 已处理音频样本数 (int16 samples)
+        # ★ v3.8 流式代数戳：每次流式状态被重置（离线同步/音频裁剪/reset）
+        # 时递增；在途的解码结果若代数不匹配则丢弃，防旧音频文本
+        # 追加到已含同段内容的离线文本尾部（导致重复上屏）
+        self._stream_generation = 0
 
         # ★ 增量文本累积 (流式 chunk 结果累积，不覆盖)
         self._accumulated_raw = ""       # 所有 chunk 文本的累积结果
@@ -191,6 +195,7 @@ class ASREngine:
         self._finalized_text = ""
         self._stream_cache = {}       # ★ 修复: 清空流式缓存
         self._stream_audio_offset = 0
+        self._stream_generation += 1  # ★ 作废在途流式解码
         self._accumulated_raw = ""    # ★ 清空增量累积
         self._last_raw_text = ""
         self._offline_text = ""       # ★ 清空离线纠正结果
@@ -199,6 +204,115 @@ class ASREngine:
         self._offline_last_audio_samples = 0  # ★ 重置音频计数基准
         self._simple_append = False     # ★ 回到正常重叠检测模式
         self._new_audio_event.clear()
+        self._finalized_audio = bytearray()  # 已裁剪的已提交音频（debug 用）
+
+    def trim_committed_audio(self, char_count: int, commit_text: str = "",
+                             remaining_text: str = ""):
+        """裁剪已提交部分对应的音频，实现增量离线纠正。
+
+        pipeline commit 后调用此方法，从 _audio_buffer 头部移除对应字节，
+        使后续离线纠正只处理未提交音频，避免 O(n²) 全量重算。
+
+        ★ 估算方式（v3.2 改进）：
+        按字符类型加权估算每字对应的音频时长：
+        - 中文/假名：1.0 单位（标准发音时长）
+        - ASCII 字母数字：1.5 单位（英文/数字发音更长）
+        - 标点/空白：0 单位（不发音）
+
+        ★ 分母修复（v3.2）：优先用 remaining_text（pipeline buffer 提交后
+        的剩余文本，来自离线纠正，与音频 buffer 严格对应）计算总权重：
+            ratio = w(committed) / (w(committed) + w(remaining))
+        _accumulated_raw 流式拼接可能膨胀失真，分母虚大会导致欠裁剪，
+        残余音频被重复识别重复上屏（如 "windows用户服务的" 重复）。
+
+        ★ 转写滞后余量（v3.3）：音频尾部约 0.6s 尚未被转写成文本
+        （流式延迟 + LLM 润色等待期间新进音频），这部分不参与比例分配，
+        否则会过裁剪丢字（宁欠勿过：欠裁剪由文本去重兜底，过裁剪无法恢复）。
+        """
+        if not char_count or not self._audio_buffer:
+            return
+
+        audio_bytes = len(self._audio_buffer)
+        audio_samples = audio_bytes // 2
+
+        # ★ 转写滞后余量：尾部 0.6s 音频视为未转写，不参与比例分配
+        LAG_MARGIN_SAMPLES = int(0.6 * self.sample_rate)
+        effective_samples = max(0, audio_samples - LAG_MARGIN_SAMPLES)
+
+        # ★ 按字符类型计算"语音权重"（发音时长近似）
+        def _char_weight(c: str) -> float:
+            if c.isascii():
+                if c.isalnum():
+                    return 1.5   # ASCII 字母数字：发音更长
+                else:
+                    return 0.0   # ASCII 标点/空白：不发音
+            else:
+                return 1.0       # 中文等：标准发音时长
+
+        # 已提交文本的权重
+        if commit_text:
+            committed_weight = sum(_char_weight(c) for c in commit_text)
+        else:
+            committed_weight = char_count  # 无文本退化为字符数
+
+        # 全部文本的权重：优先用 committed + remaining（与音频 buffer 对应）
+        if commit_text and remaining_text:
+            total_weight = committed_weight + sum(
+                _char_weight(c) for c in remaining_text)
+            total_weight = max(1.0, total_weight)
+        elif self._accumulated_raw:
+            total_weight = sum(_char_weight(c) for c in self._accumulated_raw)
+            total_weight = max(1.0, total_weight)
+        else:
+            total_weight = max(1, char_count)
+
+        # 按权重比例估算应裁剪的音频样本数（只分配已转写部分）
+        weight_ratio = min(1.0, committed_weight / total_weight)
+        remove_samples = int(effective_samples * weight_ratio)
+        remove_bytes = remove_samples * 2
+
+        # 限制裁剪范围不超过 buffer
+        remove_bytes = min(remove_bytes, audio_bytes)
+        remove_samples = remove_bytes // 2
+
+        if remove_bytes <= 0:
+            return
+
+        # 将裁剪的音频保存到 _finalized_audio（debug/审计用）
+        self._finalized_audio.extend(self._audio_buffer[:remove_bytes])
+
+        # 裁剪音频 buffer
+        del self._audio_buffer[:remove_bytes]
+
+        # 更新流式模型偏移（裁剪后 offset 也要相应回退）
+        self._stream_audio_offset = max(0, self._stream_audio_offset - remove_samples)
+
+        # 更新累积文本：优先用 remaining_text（权威的未提交文本），
+        # 保证与裁剪后的音频 buffer 严格对应
+        if remaining_text:
+            self._accumulated_raw = remaining_text
+        elif self._accumulated_raw and char_count <= len(self._accumulated_raw):
+            self._accumulated_raw = self._accumulated_raw[char_count:]
+        else:
+            self._accumulated_raw = ""
+
+        # 更新离线纠正的计数基准（让它知道文本/音频已被裁剪）
+        self._offline_last_text_len = max(0, self._offline_last_text_len - char_count)
+        self._offline_last_audio_samples = max(0, len(self._audio_buffer) // 2)
+
+        # 重置流式缓存（音频裁剪后缓存状态可能不一致）
+        self._stream_cache = {}
+        self._last_raw_text = ""
+        self._stream_generation += 1  # ★ 作废在途流式解码
+        self._simple_append = True  # 裁剪后切到直追加模式
+
+        # ★ 日志改为 INFO 级别（之前 debug 被过滤导致看起来没调用）
+        logger.info(
+            f"Audio trimmed: weight={committed_weight:.1f}/{total_weight:.1f} "
+            f"({weight_ratio:.1%}) → {remove_bytes} bytes ({remove_samples} samples), "
+            f"committed_text='{commit_text[:20]}' ({char_count} chars), "
+            f"remaining: {len(self._audio_buffer)} bytes"
+        )
 
     # ── 后台处理循环 ──────────────────────────────────
 
@@ -301,6 +415,10 @@ class ASREngine:
             if self._offline_busy:
                 continue
 
+            # ★ 音频 buffer 被裁剪为空时（全部已提交），跳过离线纠正
+            if not self._audio_buffer:
+                continue
+
             current_text_len = len(self._accumulated_raw)
             new_chars = current_text_len - self._offline_last_text_len
             first_run = (self._offline_last_text_len == 0)
@@ -347,8 +465,17 @@ class ASREngine:
                     f"+{new_chars} chars, +{new_audio_s:.0f}s audio "
                     f"(reason={reason}), running..."
                 )
+                # ★ v3.8.5 代数戳快照：解码期间若发生 commit 裁剪/reset，
+                # 结果基于裁剪前音频，包含已提交内容，回调会让已提交文本
+                # 在 buffer 复活、冲垮冻结绿区（实录："效果很棒"蒸发）
+                gen_snapshot = self._stream_generation
                 loop = asyncio.get_event_loop()
                 text = await loop.run_in_executor(None, self._run_offline_quick)
+                if gen_snapshot != self._stream_generation:
+                    logger.info(
+                        "Offline correction dropped: audio trimmed/reset "
+                        "during decode")
+                    continue
                 if text and text.strip():
                     self._offline_text = text.strip()
                     self._offline_text_generation += 1
@@ -448,14 +575,14 @@ class ASREngine:
             return
         # 替换累积文本为离线纠正结果
         self._accumulated_raw = offline_text
-        # ★ 关键：不把离线文本作为 LCP 参照物。
-        # 流式模型已重置，后续 chunk 代表全新录音，与离线文本无重叠。
-        # LCP 只在连续 chunk 之间进行（由 _accumulate 处理）。
         self._last_raw_text = ""
         # 重置流式解码状态，从当前缓冲区末尾开始
         self._stream_cache = {}
         self._stream_audio_offset = max(0, len(self._audio_buffer) // 2)
-        # 切换为直追加模式：后续流式 chunk 代表全新音频，直接追加不检测重叠
+        # ★ v3.8 作废在途流式解码：它解的是离线已覆盖的旧音频，
+        # 若完成后追加会把同段内容再拼一次（重复上屏根因）
+        self._stream_generation += 1
+        # 直追加模式：后续流式 chunk 代表全新音频，直接追加不检测重叠
         self._simple_append = True
         logger.info(
             f"Streaming reset after offline correction: "
@@ -488,6 +615,7 @@ class ASREngine:
         # 快照当前缓冲区长度，防止处理过程中 buffer 继续增长导致 offset 跳帧
         buf_len_snapshot = len(self._audio_buffer)
         byte_offset = self._stream_audio_offset * 2  # samples → bytes
+        gen_snapshot = self._stream_generation  # ★ 代数戳快照
 
         if byte_offset >= buf_len_snapshot:
             return ""
@@ -511,6 +639,12 @@ class ASREngine:
                 is_final=False,
                 chunk_size=[5, 10, 5],
             )
+
+            # ★ v3.8 代数校验：解码期间流式状态被重置（离线同步/裁剪）
+            # → 本次结果解的是旧音频，追加会重复，整体丢弃
+            if gen_snapshot != self._stream_generation:
+                logger.info("ASR partial dropped: stream state reset during decode")
+                return ""
 
             # ★ 关键修复: 只前进已处理的样本数，不跳帧
             self._stream_audio_offset += len(audio_np)
@@ -629,6 +763,49 @@ class ASREngine:
         self._last_raw_text = chunk_text
 
     # ── 最终识别 (offline + VAD + 标点) ────────────────
+
+    async def flush_final_offline(self):
+        """松键终审前的最后一次离线解码：把尚未被解码的尾部音频抛回文本链。
+
+        流式解码有 1~2s 延迟，松键太快时尾巴音频从未进过文本，
+        而 finalize 只拿 buffer 现有文本终审（实录："怎么样"只上屏到
+        "怎"，0.7s 音频躺在缓冲区里蒸发）。走正常离线纠正回调，
+        去重/冻结绿区逻辑照常生效；须在 pipeline.finalize() 之前调用
+        （_finalizing 锁住后离线纠正会被拒收）。
+        """
+        if not self._models_loaded or not self._audio_buffer:
+            return
+        current_samples = len(self._audio_buffer) // 2
+        new_samples = current_samples - self._offline_last_audio_samples
+        if new_samples < int(0.2 * self.sample_rate):
+            return  # 上次离线解码后没有新增音频，无需补刀
+        logger.info(
+            f"Final offline flush: +{new_samples / self.sample_rate:.1f}s "
+            f"undecoded tail audio")
+        self._offline_busy = True  # 互斥周期离线纠正
+        try:
+            self._offline_last_audio_samples = current_samples
+            gen_snapshot = self._stream_generation
+            loop = asyncio.get_event_loop()
+            text = await loop.run_in_executor(None, self._run_offline_quick)
+            if gen_snapshot != self._stream_generation:
+                logger.info("Final offline flush dropped: "
+                            "audio trimmed/reset during decode")
+                return
+            if text and text.strip():
+                self._offline_text = text.strip()
+                self._offline_text_generation += 1
+                self._offline_last_text_len = len(self._offline_text)
+                if self._offline_callback:
+                    await self._offline_callback(
+                        self._offline_text,
+                        self._offline_text_generation,
+                    )
+                self._sync_streaming_from_offline()
+        except Exception as e:
+            logger.error(f"Final offline flush failed: {e}", exc_info=True)
+        finally:
+            self._offline_busy = False
 
     async def finalize(self) -> str:
         """最终识别 — 使用完整离线模型"""

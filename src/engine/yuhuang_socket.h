@@ -123,6 +123,9 @@ inline void BackendClient::stopReceiveLoop() {
     if (receiveThread_.joinable()) {
         receiveThread_.join();
     }
+    // 重置连接状态，避免 connect() 因 connected_ 仍为 true
+    // 而跳过创建新 socket，导致复用已 shutdown 的旧 fd
+    connected_.store(false);
 }
 
 inline void BackendClient::receiveLoop() {
@@ -206,7 +209,7 @@ inline void BackendClient::receiveLoop() {
         std::string text = extractField(msg, "text");
 
         if (callback_ && !type.empty()) {
-            callback_(type, text);
+            callback_(type, text, msg);
         }
     }
 }

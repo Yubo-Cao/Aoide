@@ -58,3 +58,18 @@ llm:
   optimize_delay: 0.5
   # Delay before auto-committing after LLM completion (seconds)
   auto_commit_delay: 0.2
+
+# Pipeline v3.0 — 三区间提交策略
+pipeline:
+  # 红色块最大字数（超出强制变黄）
+  red_max_size: 10
+  # 最小提交字数
+  min_commit_chars: 10
+  # 安全距离（距尾部超过此字数的绿区可提交）
+  safe_distance: 50
+  # 绿区稳定时间阈值（秒）
+  stable_time: 3.0
+  # 绿区超限强制提交
+  force_commit_size: 150
+  # 黄区稳定超时变绿（秒）
+  yellow_stable_timeout: 8.0

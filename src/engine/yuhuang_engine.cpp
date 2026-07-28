@@ -110,12 +110,13 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
 
     // 注册回调（无论当前是否已连接，保证后续重连时回调依然有效）
     backend_->setResultCallback([this](const std::string &type,
-                                        const std::string &text) {
+                                        const std::string &text,
+                                        const std::string &raw_msg) {
         std::cout << "[YuHuang] CB recv: type=" << type
                   << " text=" << text.substr(0, 40) << std::endl;
 
         // 通过 EventDispatcher 调度到 fcitx5 主线程执行
-        eventDispatcher_.schedule([this, type, text]() {
+        eventDispatcher_.schedule([this, type, text, raw_msg]() {
             std::cout << "[YuHuang] CB exec on main: type=" << type
                       << " text=" << text.substr(0, 40) << std::endl;
 
@@ -131,7 +132,60 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
                       << (state->inputContext() ? state->inputContext()->program() : "?")
                       << std::endl;
 
-            if (type == "intermediate") {
+            // 简易 JSON 字段提取（无三方库依赖）
+            auto extractField = [](const std::string &json,
+                                   const std::string &field) -> std::string {
+                std::string key = "\"" + field + "\":";
+                size_t pos = json.find(key);
+                if (pos == std::string::npos) return "";
+                pos += key.size();
+                while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t'))
+                    pos++;
+                if (pos >= json.size()) return "";
+                if (json[pos] == '"') {
+                    pos++;
+                    std::string result;
+                    while (pos < json.size()) {
+                        if (json[pos] == '\\' && pos + 1 < json.size()) {
+                            result += json[pos + 1];
+                            pos += 2;
+                        } else if (json[pos] == '"') {
+                            break;
+                        } else {
+                            result += json[pos];
+                            pos++;
+                        }
+                    }
+                    return result;
+                }
+                size_t end = json.find_first_of(",}]}\n", pos);
+                if (end == std::string::npos) return json.substr(pos);
+                std::string val = json.substr(pos, end - pos);
+                size_t s = val.find_first_not_of(" \t");
+                if (s == std::string::npos) return "";
+                size_t e = val.find_last_not_of(" \t");
+                return val.substr(s, e - s + 1);
+            };
+
+            if (type == "preedit") {
+                // v3.0 分段预编辑（三色渲染）— 从 flat JSON 提取各颜色段
+                std::string green = extractField(raw_msg, "green");
+                std::string yellow = extractField(raw_msg, "yellow");
+                std::string red = extractField(raw_msg, "red");
+                std::cout << "[YuHuang] preedit: green=" << green.size()
+                          << " yellow=" << yellow.size()
+                          << " red=" << red.size()
+                          << " total=" << (green.size()+yellow.size()+red.size())
+                          << " raw_len=" << raw_msg.size() << std::endl;
+                std::vector<TextSegment> segments;
+                if (!green.empty()) segments.push_back({green, "green"});
+                if (!yellow.empty()) segments.push_back({yellow, "yellow"});
+                if (!red.empty()) segments.push_back({red, "red"});
+                std::cout << "[YuHuang] preedit: segments=" << segments.size()
+                          << " ic=" << (state->inputContext() ? "OK" : "NULL")
+                          << std::endl;
+                state->updatePreedit(segments);
+            } else if (type == "intermediate") {
                 state->updatePreedit(text);
             } else if (type == "final") {
                 state->updatePreedit(text);
@@ -175,8 +229,9 @@ void YuHuangEngine::activate(const fcitx::InputMethodEntry &entry,
               << (ic ? ic->program() : "?") << std::endl;
 
     if (backend_ && !backend_->isConnected()) {
-        // 序列: 停止旧线程 → 重连 → 启动新线程
-        backend_->stopReceiveLoop();
+        // 完全断开旧连接（关闭 fd、设 connected_=false），
+        // 否则 connect() 会因为 connected_=true 直接返回，复用已 shutdown 的旧 fd
+        backend_->disconnect();
         if (backend_->connect()) {
             backend_->startReceiveLoop();
             sendConfigToBackend();
@@ -218,6 +273,16 @@ void YuHuangEngine::keyEvent(const fcitx::InputMethodEntry &entry,
 
     const fcitx::Key &key = keyEvent.key();
     bool isRelease = keyEvent.isRelease();
+
+    // ★ 自动重连：backend 断连后在任意按键时尝试重连
+    if (backend_ && !backend_->isConnected()) {
+        backend_->disconnect();  // 清理旧 fd
+        if (backend_->connect()) {
+            backend_->startReceiveLoop();
+            sendConfigToBackend();
+            std::cout << "[YuHuang] Backend auto-reconnected on key event" << std::endl;
+        }
+    }
 
     // Log every key event for debugging (remove in production?)
     std::cout << "[YuHuang] keyEvent: sym=0x" << std::hex << key.sym()
