@@ -92,6 +92,7 @@ class LLMOptimizer:
 
     async def optimize(self, text: str, prev_context: str = "",
                        next_context: str = "",
+                       background_context: str = "",
                        urgent: bool = False) -> Optional[str]:
         """一次性的文本优化（绿区润色 / 最终提交）
 
@@ -100,16 +101,24 @@ class LLMOptimizer:
         （标点、重字），但禁止输出上文。
         next_context: 后续未定稿的粗识别文本 —— 提供语义依据（如术语纠错
         需要后文佐证），但禁止输出下文。
+        ★ v3.8.7 background_context: 更早的已上屏定稿文本（紧邻上文之前
+        的滑窗）—— 只用于统一用词与专名（实录：前段定稿"手冲"，110s
+        后 ASR 吐"首充"，无锚点时 LLM 无理由改写），与拼接点物理隔开，
+        降低抄写风险。
         ★ v3.8.1 urgent：终审路径跳过 optimize_delay（松手后每 0.1s 都是
         用户在等，超时预算不容白睡）
         """
         if not text or not text.strip():
             return None
-        if not prev_context and not next_context:
+        if not prev_context and not next_context and not background_context:
             return await self._call_llm(
                 f"请校对这段语音识别文本：\n\n{text}", urgent=urgent
             )
         parts = []
+        if background_context:
+            parts.append(
+                f"【前文参考｜更早的已上屏定稿，仅供统一用词与专名，"
+                f"禁止输出其中任何内容】\n{background_context}")
         if prev_context:
             parts.append(
                 f"【上文｜已上屏定稿，仅供衔接参考，禁止输出】\n{prev_context}")
@@ -120,6 +129,7 @@ class LLMOptimizer:
         user_msg = (
             "请校对语音识别文本中的【待校对段】，结合上下文纠错，"
             "并保证与上文衔接自然（开头不重复上文结尾的字词和标点）。"
+            "同一事物的用词、专名拼写须与【前文参考】和【上文】保持一致。"
             "输出必须在待校对段结束处停笔：即使待校对段结尾是半截的残词，"
             "也保持截断原样，绝不可用下文续写补全。"
             "只输出待校对段的校对结果：\n\n" + "\n\n".join(parts)

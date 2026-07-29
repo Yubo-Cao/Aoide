@@ -1,5 +1,11 @@
 """YuHuang PTT Pipeline v3.8 — 三区间字符串模型 + 增量音频裁剪 + 润色结果切句提交
 
+v3.8.7 变更摘要:
+  - 双层上下文：紧邻上文（40 字，管拼接）之外新增前文参考
+    （≤500 字滑窗，管用词一致性）；修实录：同一视频前段已定稿
+    "手冲"，110s 后 ASR 吐"首充"，40 字窗口早已遗忘锚点，LLM
+    孤立看"首充"无理由改写 → 前后用词不一致
+
 v3.8 变更摘要:
   - 冻结绿区：离线重识别不再改写绿区文本（对同段音频的输出会反复
     抖动，导致真实 LLM 5~7s 润色期间头部校验永远失败、绿区无法上屏）；
@@ -669,6 +675,11 @@ class PTTPipelineV3:
                                 # 切段主要为并行降尾延，35 字兼顾跨段衔接质量
     PREV_CONTEXT_CHARS = 40    # 送润时携带的已定稿上文尾部长度
     NEXT_CONTEXT_CHARS = 30    # 送润时携带的后续粗识别下文长度
+    # ★ v3.8.7 双层上下文：紧邻上文管拼接，前文参考管用词一致性
+    #   （实录："手冲"上屏 110s 后 ASR 吐"首充"，40 字窗口早已
+    #   遗忘锚点，LLM 孤立看"首充"完全合法，无理由改写）
+    BACKGROUND_CONTEXT_CHARS = 500  # 前文参考滑窗长度（≈最近 2 分钟定稿）
+    COMMITTED_TAIL_CAP = 800        # 会话内已定稿文本的记忆上限
 
     def __init__(self, server, llm_optimizer=None):
         self.server = server
@@ -755,14 +766,24 @@ class PTTPipelineV3:
         prev_ctx = self._committed_tail[-self.PREV_CONTEXT_CHARS:]
         next_ctx = self.buffer.full_text[
             len(raw_text):len(raw_text) + self.NEXT_CONTEXT_CHARS]
+        bg_ctx = self._background_context()
         try:
             self._refine_task = asyncio.create_task(
-                self._refine_and_commit(raw_text, prev_ctx, next_ctx, relaxed))
+                self._refine_and_commit(
+                    raw_text, prev_ctx, next_ctx, relaxed, bg_ctx))
         except RuntimeError:
             # 无 event loop（同步测试环境）：回退原文切分提交
             cut = self.buffer._find_commit_point(raw_text, relaxed=True)
             if cut > 0:
                 self.buffer._do_commit(raw_text[:cut])
+
+    def _background_context(self) -> str:
+        """★ v3.8.7 前文参考：紧邻上文之前的已定稿文本滑窗。
+
+        与紧邻上文物理隔开：拼接上文要暗示 LLM "输出接在这后面"，
+        参考上文恰恰要切断这种暗示（防抄写，v3.8.4 血泪）。"""
+        return self._committed_tail[:-self.PREV_CONTEXT_CHARS][
+            -self.BACKGROUND_CONTEXT_CHARS:]
 
     @staticmethod
     def _strip_context_echo(refined: str, prev_ctx: str,
@@ -829,7 +850,8 @@ class PTTPipelineV3:
         return min(len(raw), round(cut * len(raw) / max(1, len(refined))))
 
     async def _refine_and_commit(self, raw_text: str, prev_ctx: str = "",
-                                 next_ctx: str = "", relaxed: bool = False):
+                                 next_ctx: str = "", relaxed: bool = False,
+                                 bg_ctx: str = ""):
         """LLM 润色整个绿区，在润色结果上切句提交；超时/失败回退原文切分。
 
         v3.7 流程：
@@ -842,7 +864,8 @@ class PTTPipelineV3:
         try:
             refined = await asyncio.wait_for(
                 self.llm_optimizer.optimize(
-                    raw_text, prev_context=prev_ctx, next_context=next_ctx),
+                    raw_text, prev_context=prev_ctx, next_context=next_ctx,
+                    background_context=bg_ctx),
                 timeout=self.LLM_REFINE_TIMEOUT)
         except asyncio.TimeoutError:
             logger.warning("LLM refine timed out, falling back to raw split")
@@ -959,6 +982,8 @@ class PTTPipelineV3:
         chunks = self._split_final_chunks(raw)
         # ★ 跨段衔接：每段都带上文（已定稿尾部 / 前一 chunk 原文尾部）
         # 和下文（后一 chunk 头部），并行请求互不等待
+        # ★ v3.8.7 前文参考全段共用（会话内用词一致性锚点）
+        bg_ctx = self._background_context()
         prev_ctxs, next_ctxs = [], []
         for i, c in enumerate(chunks):
             if i == 0:
@@ -971,7 +996,8 @@ class PTTPipelineV3:
                 next_ctxs.append("")
         tasks = [
             asyncio.ensure_future(self.llm_optimizer.optimize(
-                c, prev_context=p, next_context=nx, urgent=True))
+                c, prev_context=p, next_context=nx,
+                background_context=bg_ctx, urgent=True))
             for c, p, nx in zip(chunks, prev_ctxs, next_ctxs)]
         try:
             await asyncio.wait(tasks, timeout=self.LLM_FINAL_TIMEOUT)
@@ -1039,9 +1065,10 @@ class PTTPipelineV3:
         这里通过 create_task 将异步 broadcast 调度到 event loop。
         """
         if text:
-            # ★ 累积已定稿尾部（跨段衔接的上文，只保留必要长度）
+            # ★ 累积已定稿文本（v3.8.7：容量扩到 800 字，尾部 40 字供
+            # 拼接，更早部分作前文参考——用词一致性锚点）
             self._committed_tail = (
-                self._committed_tail + text)[-self.PREV_CONTEXT_CHARS * 2:]
+                self._committed_tail + text)[-self.COMMITTED_TAIL_CAP:]
         if self.server and text:
             try:
                 async def _push():
