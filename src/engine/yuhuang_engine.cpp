@@ -14,7 +14,7 @@
 
 namespace yuhuang {
 
-// ★ v3.8.11 PTT 关键事件日志落盘：fcitx5 手动重启后 stdout 常接在
+// ★ PTT 关键事件日志落盘：fcitx5 手动重启后 stdout 常接在
 // 已销毁的终端上（两次卡麦事故的引擎日志全部丢失），取证必须不依赖终端。
 static void logPtt(const std::string &msg) {
     std::cout << "[YuHuang] " << msg << std::endl;
@@ -190,7 +190,7 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
             };
 
             if (type == "preedit") {
-                // v3.0 分段预编辑（三色渲染）— 从 flat JSON 提取各颜色段
+                // 分段预编辑（三色渲染）— 从 flat JSON 提取各颜色段
                 std::string green = extractField(raw_msg, "green");
                 std::string yellow = extractField(raw_msg, "yellow");
                 std::string red = extractField(raw_msg, "red");
@@ -278,12 +278,12 @@ void YuHuangEngine::deactivate(const fcitx::InputMethodEntry &entry,
     std::cout << "[YuHuang] Deactivated on: "
               << (ic ? ic->program() : "?") << std::endl;
 
-    // ★ v3.8.10 统一走 stopListeningInternal（顺带修复旧版不清
+    // ★ 统一走 stopListeningInternal（顺带修复旧版不清
     // triggerPressed_ 的潜伏 bug：焦点切走后引擎仍认为触发键按着）
     stopListeningInternal("focus-out");
 }
 
-// ---- ★ v3.8.10 PTT 停止统一入口与物理键盘看门狗 ----
+// ---- ★ PTT 停止统一入口与物理键盘看门狗 ----
 
 void YuHuangEngine::stopListeningInternal(const char *reason) {
     // 注意：不在这里销毁 pttWatchdog_——本函数可能在看门狗自身回调内
@@ -379,7 +379,7 @@ void YuHuangEngine::keyEvent(const fcitx::InputMethodEntry &entry,
                 keyEvent.filterAndAccept();
             }
         } else {
-            // ★ v3.8.10 重复按下救援：修饰键无自动重复，triggerPressed_
+            // ★ 重复按下救援：修饰键无自动重复，triggerPressed_
             // 已真时再收到按下 = 松键事件被合成器吞了，用户在补按
             // 救援 -> 当停止处理。限定 isModifier()：非修饰触发键有
             // 自动重复，会误杀正常长按。
@@ -396,7 +396,7 @@ void YuHuangEngine::keyEvent(const fcitx::InputMethodEntry &entry,
             if (backend_ && backend_->isConnected()) {
                 backend_->sendCommand("{\"type\":\"start_listening\"}");
             }
-            startPttWatchdog();  // ★ v3.8.10 监控物理键位，防松键事件丢失
+            startPttWatchdog();  // ★ 监控物理键位，防松键事件丢失
             keyEvent.filterAndAccept();
         }
         return;

@@ -90,7 +90,7 @@ class ASREngine:
         # ★ 修复: 流式解码状态 (跨多次 _transcribe_partial 调用保持)
         self._stream_cache = {}          # FunASR streaming cache
         self._stream_audio_offset = 0    # 已处理音频样本数 (int16 samples)
-        # ★ v3.8 流式代数戳：每次流式状态被重置（离线同步/音频裁剪/reset）
+        # ★ 流式代数戳：每次流式状态被重置（离线同步/音频裁剪/reset）
         # 时递增；在途的解码结果若代数不匹配则丢弃，防旧音频文本
         # 追加到已含同段内容的离线文本尾部（导致重复上屏）
         self._stream_generation = 0
@@ -213,19 +213,19 @@ class ASREngine:
         pipeline commit 后调用此方法，从 _audio_buffer 头部移除对应字节，
         使后续离线纠正只处理未提交音频，避免 O(n²) 全量重算。
 
-        ★ 估算方式（v3.2 改进）：
+        ★ 估算方式（改进）：
         按字符类型加权估算每字对应的音频时长：
         - 中文/假名：1.0 单位（标准发音时长）
         - ASCII 字母数字：1.5 单位（英文/数字发音更长）
         - 标点/空白：0 单位（不发音）
 
-        ★ 分母修复（v3.2）：优先用 remaining_text（pipeline buffer 提交后
+        ★ 分母修复：优先用 remaining_text（pipeline buffer 提交后
         的剩余文本，来自离线纠正，与音频 buffer 严格对应）计算总权重：
             ratio = w(committed) / (w(committed) + w(remaining))
         _accumulated_raw 流式拼接可能膨胀失真，分母虚大会导致欠裁剪，
         残余音频被重复识别重复上屏（如 "windows用户服务的" 重复）。
 
-        ★ 转写滞后余量（v3.3）：音频尾部约 0.6s 尚未被转写成文本
+        ★ 转写滞后余量：音频尾部约 0.6s 尚未被转写成文本
         （流式延迟 + LLM 润色等待期间新进音频），这部分不参与比例分配，
         否则会过裁剪丢字（宁欠勿过：欠裁剪由文本去重兜底，过裁剪无法恢复）。
         """
@@ -243,7 +243,7 @@ class ASREngine:
         def _char_weight(c: str) -> float:
             if c.isascii():
                 if c.isalnum():
-                    # ★ v3.8.10: 1.5 → 0.3。旧值按中文语境逐字母拼读校准
+                    # ★ 1.5 → 0.3。旧值按中文语境逐字母拼读校准
                     # （"F-C-I-T-X"每个字母读满 1.5 拍），但连读英文
                     # 每秒飞过 12+ 字母，权重虚高导致超裁；实录：提交
                     # 152 字英文裁掉 73.5% 音频，多砍 ~4s，把后续中文
@@ -471,7 +471,7 @@ class ASREngine:
                     f"+{new_chars} chars, +{new_audio_s:.0f}s audio "
                     f"(reason={reason}), running..."
                 )
-                # ★ v3.8.5 代数戳快照：解码期间若发生 commit 裁剪/reset，
+                # ★ 代数戳快照：解码期间若发生 commit 裁剪/reset，
                 # 结果基于裁剪前音频，包含已提交内容，回调会让已提交文本
                 # 在 buffer 复活、冲垮冻结绿区（实录："效果很棒"蒸发）
                 gen_snapshot = self._stream_generation
@@ -585,7 +585,7 @@ class ASREngine:
         # 重置流式解码状态，从当前缓冲区末尾开始
         self._stream_cache = {}
         self._stream_audio_offset = max(0, len(self._audio_buffer) // 2)
-        # ★ v3.8 作废在途流式解码：它解的是离线已覆盖的旧音频，
+        # ★ 作废在途流式解码：它解的是离线已覆盖的旧音频，
         # 若完成后追加会把同段内容再拼一次（重复上屏根因）
         self._stream_generation += 1
         # 直追加模式：后续流式 chunk 代表全新音频，直接追加不检测重叠
@@ -646,7 +646,7 @@ class ASREngine:
                 chunk_size=[5, 10, 5],
             )
 
-            # ★ v3.8 代数校验：解码期间流式状态被重置（离线同步/裁剪）
+            # ★ 代数校验：解码期间流式状态被重置（离线同步/裁剪）
             # → 本次结果解的是旧音频，追加会重复，整体丢弃
             if gen_snapshot != self._stream_generation:
                 logger.info("ASR partial dropped: stream state reset during decode")

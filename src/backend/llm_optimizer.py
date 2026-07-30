@@ -31,10 +31,10 @@ class LLMOptimizer:
         self.optimize_delay = optimize_delay
         self.auto_commit_delay = auto_commit_delay
         self.system_prompt = system_prompt or self._default_prompt()
-        # ★ v3.8.2 连接复用：避免每次请求重新 TCP+TLS 握手（省 0.2~0.4s）
+        # ★ 连接复用：避免每次请求重新 TCP+TLS 握手（省 0.2~0.4s）
         self._client: Optional[httpx.AsyncClient] = None
         self._client_base_url: str = ""
-        # ★ v3.8.3 关思考自适应梯子：当前尝试到第几档（收敛后记住）
+        # ★ 关思考自适应梯子：当前尝试到第几档（收敛后记住）
         self._think_off_idx: int = 0
         self._think_warned: bool = False
 
@@ -96,16 +96,16 @@ class LLMOptimizer:
                        urgent: bool = False) -> Optional[str]:
         """一次性的文本优化（绿区润色 / 最终提交）
 
-        ★ v3.5 跨段衔接：
+        ★ 跨段衔接：
         prev_context: 已上屏定稿文本的尾部 —— 让 LLM 知道本段开头如何衔接
         （标点、重字），但禁止输出上文。
         next_context: 后续未定稿的粗识别文本 —— 提供语义依据（如术语纠错
         需要后文佐证），但禁止输出下文。
-        ★ v3.8.7 background_context: 更早的已上屏定稿文本（紧邻上文之前
+        ★ background_context: 更早的已上屏定稿文本（紧邻上文之前
         的滑窗）—— 只用于统一用词与专名（实录：前段定稿"手冲"，110s
         后 ASR 吐"首充"，无锚点时 LLM 无理由改写），与拼接点物理隔开，
         降低抄写风险。
-        ★ v3.8.1 urgent：终审路径跳过 optimize_delay（松手后每 0.1s 都是
+        ★ urgent：终审路径跳过 optimize_delay（松手后每 0.1s 都是
         用户在等，超时预算不容白睡）
         """
         if not text or not text.strip():
@@ -163,7 +163,7 @@ class LLMOptimizer:
 
         urgent=True（终审）跳过 optimize_delay 防抖延迟。
 
-        ★ v3.8.2/v3.8.3 提速三件套（根治"吐字慢"假象）：
+        ★ 提速三件套（根治"吐字慢"假象）：
         - 关闭思考模式：混合思考模型（DeepSeek V4 等）默认 thinking
           开启，思维链走 reasoning_content 被本解析器丢弃，看起来就是
           几秒没产出；各家开关写法不同，用 _THINK_OFF_LADDER 自适应

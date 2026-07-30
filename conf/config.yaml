@@ -59,7 +59,7 @@ llm:
   # Delay before auto-committing after LLM completion (seconds)
   auto_commit_delay: 0.2
 
-# Pipeline v3.0 — 三区间提交策略
+# Pipeline — 三区间提交策略
 pipeline:
   # 红色块最大字数（超出强制变黄）
   red_max_size: 10

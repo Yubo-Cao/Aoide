@@ -10,7 +10,7 @@ target_link_libraries(yuhuang PRIVATE
     Fcitx5::Utils
 )
 
-# ★ v3.8.11 PTT 看门狗依赖 Xlib + XInput2（raw 事件监听物理键盘，
+# ★ PTT 看门狗依赖 Xlib + XInput2（raw 事件监听物理键盘，
 # grab 冻结期间照常投递；XQueryKeymap 作辅助通道）。
 # 找不到时逐级降级：无 Xi 则只用键位图，无 X11 则看门狗不启用。
 find_package(X11)

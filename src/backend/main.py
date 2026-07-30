@@ -23,7 +23,7 @@ from backend.asr_engine import ASREngine
 from backend.llm_optimizer import LLMOptimizer
 from backend.audio_capture import AudioCapture
 from backend.unix_server import UnixSocketServer
-from backend.pipeline_v3 import PTTPipelineV3
+from backend.pipeline import PTTPipeline
 
 logger = logging.getLogger("yuhuang")
 
@@ -208,8 +208,8 @@ def main():
     # ---- Server setup ----
     server = UnixSocketServer(socket_path)
 
-    # ---- PTT 流式管道 v3.0 ----
-    _pipeline = PTTPipelineV3(server, llm_optimizer)
+    # ---- PTT 流式管道 ----
+    _pipeline = PTTPipeline(server, llm_optimizer)
 
     # ---- Callbacks ----
 
@@ -233,7 +233,7 @@ def main():
 
     # PTT handlers
     async def on_start_listening():
-        # ★ v3.8.10 防重入：已在监听时的重复 start（典型场景：合成器
+        # ★ 防重入：已在监听时的重复 start（典型场景：合成器
         # 吞掉松键事件后用户补按触发键救援）绝不能 reset 洗掉
         # 进行中的会话，直接忽略
         if audio_capture.is_listening:
@@ -261,7 +261,7 @@ def main():
                 if not asr_engine._offline_busy:
                     break
                 await asyncio.sleep(0.05)
-            # ★ v3.8.6 尾部音频补刀：流式解码有延迟，松键太快时尾巴
+            # ★ 尾部音频补刀：流式解码有延迟，松键太快时尾巴
             # 音频还没进过文本（实录："怎么样"只上屏到"怎"）
             await asr_engine.flush_final_offline()
         await _pipeline.finalize()

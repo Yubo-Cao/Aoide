@@ -1,81 +1,12 @@
-"""YuHuang PTT Pipeline v3.8 — 三区间字符串模型 + 增量音频裁剪 + 润色结果切句提交
+"""YuHuang PTT 流水线 — 三区间字符串模型 + 增量音频裁剪 + 润色结果切句提交
 
-v3.8.10 变更摘要:
-  - _do_commit 记账 off-by-one 修复：弹出数改用原始前缀长度 len(text)，
-    strip 只用于上屏显示。旧版用 strip 后长度弹出，英文切点留下的
-    头部空格会导致少弹 1 字，提交句末字符残留 buffer 头重复上屏
-  - （配套 asr_engine 修复）ASCII 字母音频权重 1.5→0.3，根治英文
-    提交超裁音频砍头后续中文（"OK这次我们用中文聊聊吧"蒸发事故）
-  - （配套 engine/main 修复）PTT 丢失松键三层防御：X11 物理键盘
-    看门狗 + 重复按下救援 + 后端 start 防重入
+流式识别的文本按新旧分三段推进：红区（最新草稿，离线模型必重写）→
+黄区（离线修正射程内）→ 绿区（已稳定，可提交）。绿区整段送 LLM 润色，
+在润色文的可靠标点上找切点、映射回原文位置后整句上屏，切点之后的残句
+留在绿区与后续新文字合并再润，周而复始。每次上屏都通知 ASR 引擎裁掉
+已提交部分的音频，避免重复解码。
 
-v3.8.9 变更摘要:
-  - ASCII 句读边界（. ! ? ; 强 / , 中）+ 数字保护（24.04 / 1,000 不切）：
-    旧版三套边界字符集全是中文标点，英文/中英混说段落对提交机器
-    "边界失明"：黄区边界钉死在硬切兜底 60 字处，红区无限堆积（实录
-    1089 字），has_boundary/_refined_cut 全灭，只剩 12s 保险丝泄压
-  - 英文句读结尾的提交自动补尾空格（屏幕上 "see.So" → "see. So"，
-    中文全角标点不受影响）
-
-v3.8.8 变更摘要:
-  - 修法C 内容感知稳定时钟：_last_green_modified 只在绿区文本真的
-    变化时刷新（旧版每次 _recalc_zones 无条件刷新，ASR 每 0.3s 更新
-    一次 → 3s 稳定兜底永远打不着；实录：英文会话绿区内容 82s 纹丝
-    不动仍零提交）
-  - 修法B 提交饥饿保险丝：距上次提交超 12s 且绿区足够 → 跳过 LLM
-    直接提交原文泄压（死亡螺旋下提交断流 → 音频零裁剪 → SenseVoice
-    超长解码截断丢文；烂句上屏 > 句子蒸发）
-
-v3.8.7 变更摘要:
-  - 双层上下文：紧邻上文（40 字，管拼接）之外新增前文参考
-    （≤500 字滑窗，管用词一致性）；修实录：同一视频前段已定稿
-    "手冲"，110s 后 ASR 吐"首充"，40 字窗口早已遗忘锚点，LLM
-    孤立看"首充"无理由改写 → 前后用词不一致
-
-v3.8 变更摘要:
-  - 冻结绿区：离线重识别不再改写绿区文本（对同段音频的输出会反复
-    抖动，导致真实 LLM 5~7s 润色期间头部校验永远失败、绿区无法上屏）；
-    锚点/序列对齐拼接绿区+新黄红区，副作用顺带丢弃头部幽灵残余字
-  - commit_refined 校验失败从静默丢弃改为 warning 日志（可观测）
-  - LLM_FINAL_TIMEOUT 3s→6s：真实 LLM 单次 5~7s，3s 等于永远吃不到终审结果
-
-v3.7 变更摘要:
-  - 切点改在润色结果上决定：整个绿区送 LLM，在润色文（标点由 LLM
-    规范过，无假句号/漏句号）上找最后一个强边界切句，difflib 序列对齐
-    把切点映射回原文位置后提交（音频裁剪/buffer 弹出仍以原文前缀为准）
-  - 原文残句留在绿区与后续新文字合并进下一轮润色（周而复始）
-
-v3.6 变更摘要:
-  - 句子优先提交：常态只在强边界（。！？；）处整句上屏，边界后
-    残句留在绿区与后续新文字合并再润（周而复始）；停顿超时/绿区超限
-    才放宽到逗号/语气词兜底（_try_commit/_find_commit_point 的 relaxed）
-
-v3.5 变更摘要:
-  - 跨段衔接：润色请求携带上文（已定稿尾部）+下文（后续粗识别），
-    LLM 可基于跨段语义纠错并保证段界标点/重字衔接自然
-  - _strip_context_echo 防回显：剥离 LLM 输出中的标签/上文尾部回显
-
-v3.4 变更摘要:
-  - 绿区超限强制提交改走 LLM 润色通道（旧版 _do_commit 原文绕过润色，
-    导致 "vebco与火爆" 这类残次词直接上屏）
-  - finalize 终审提速：超时 8s→3s；长文本按语义边界切两段并行润色；
-    终审等待期间先渲染全绿 preedit 给用户即时反馈
-
-v3.3 变更摘要:
-  - LLM 模式提交链路重构：绿区头部先送 LLM 润色、后提交（超时回退原文）
-  - 删除 _try_llm_refine（存在润色文本 append 到尾部的乱序 bug）
-  - finalize 加 _finalizing 锁：阻断 LLM 等待期间离线纠正/应急提交的竞态重复
-  - _strip_committed_overlap 检查窗口降到 1 字（1~2 字裁剪残余漏网）
-  - 离线纠正头部残留标点清理（消除 "，。" 双标点）
-
-v3.1 变更摘要:
-  - 删除 _find_committed_offset：commit 后裁剪音频，离线纠正输出天然是增量
-  - 新增 _trim_audio_callback：commit 时通知 ASR 引擎裁剪已提交音频
-  - 修复 _do_commit strip 不一致
-  - 修复 finalize 丢字：直接用 buffer.full_text
-  - 修复语义边界：WEAK_BOUNDARIES 加最小位置约束 + ASCII 序列保护
-  - 删除 DISPLAY_LINE_WIDTH 硬换行
-  - preedit 只渲染黄+红区（绿区 commit 后清空，不再混入 preedit）
+改动历史见 git log。
 """
 
 import asyncio
@@ -108,14 +39,14 @@ class CandidateBuffer:
     STABLE_TIME_THRESHOLD = 3.0  # 绿区稳定超时兜底（长停顿场景）
     FORCE_COMMIT_SIZE = 60     # 绿区超限强制提交
     YELLOW_STABLE_TIMEOUT = 3.0  # 黄区稳定超时推绿（长停顿场景）
-    # ★ v3.8.8 修法B：距上次提交超时 → 绕过 LLM 强制泄压提交
+    # ★ 距上次提交超时 → 绕过 LLM 强制泄压提交
     COMMIT_STARVATION_TIMEOUT = 12.0
 
     # 语义边界字符集
     STRONG_BOUNDARIES = frozenset({'。', '！', '？', '；', '\n'})
     MEDIUM_BOUNDARIES = frozenset({'，', '、', '：'})
     WEAK_BOUNDARIES = frozenset({'呢', '啊', '吧', '吗', '嘛', '哦', '哈'})
-    # ★ v3.8.9 ASCII 句读（位置相关，需配合 _ascii_boundary_kind 的
+    # ★ ASCII 句读（位置相关，需配合 _ascii_boundary_kind 的
     # 数字保护使用，不直接并入上面的集合）
     ASCII_STRONG = frozenset({'.', '!', '?', ';'})
     ASCII_MEDIUM = frozenset({','})
@@ -129,7 +60,7 @@ class CandidateBuffer:
         self._last_commit_raw: str = ""          # 最近一次提交对应的 ASR 原文（去重匹配用）
         self._last_yellow_modified: float = 0
         self._last_green_modified: float = 0
-        # ★ v3.8.8 修法C：绿区内容快照，时间戳只在内容真变时刷新
+        # ★ 绿区内容快照，时间戳只在内容真变时刷新
         self._last_green_snapshot: str = ""
         self._last_commit_time: float = time.time()
         self._showing_placeholder: bool = False
@@ -137,11 +68,11 @@ class CandidateBuffer:
         # ★ trim 回调：commit 时通知 ASR 引擎裁剪对应音频
         self._trim_audio_callback: Optional[Callable[[int], None]] = None
 
-        # ★ 提交回调：由 PTTPipelineV3 注入
+        # ★ 提交回调：由 PTTPipeline 注入
         self._notify_commit: Callable[[str], None] = lambda text: None
 
-        # ★ 润色请求回调：由 PTTPipelineV3 注入
-        # v3.7: 参数为 (整个绿区原文, relaxed)，切点由润色结果决定
+        # ★ 润色请求回调：由 PTTPipeline 注入
+        # 参数为 (整个绿区原文, relaxed)，切点由润色结果决定
         self._request_refine: Optional[Callable[[str, bool], None]] = None
 
         # ★ LLM 可用性标志：决定是否有绿区
@@ -149,7 +80,7 @@ class CandidateBuffer:
         # True（有 LLM）：黄区稳定 → 绿区（LLM润色）→ commit
         self._llm_enabled: bool = False
 
-        # ★ v3.8 冻结绿区长度：前 N 字已冻结，不再被离线重识别改写，
+        # ★ 冻结绿区长度：前 N 字已冻结，不再被离线重识别改写，
         # 且 _recalc_zones 不得让绿区边界回缩到冻结区内
         self._frozen_green_len: int = 0
 
@@ -205,7 +136,7 @@ class CandidateBuffer:
         else:
             # buffer 文本不在流式全文中（头部含裁剪残余/标点抖动，
             # 两边位置索引不可直接互换）
-            # ★ v3.8.1：先锚点对齐保留区尾部再替换红区，避免错位重复
+            # ★ 先锚点对齐保留区尾部再替换红区，避免错位重复
             # （实测：流式头部多 7 字残余 → full_text[preserved:] 错位
             # 把 "FCITX5，" 重复灌进红区）
             preserved = self._yellow_end
@@ -250,7 +181,7 @@ class CandidateBuffer:
         if not offline_text:
             return
 
-        # ★ v3.8 冻结绿区：绿区文本不再被离线重识别改写
+        # ★ 冻结绿区：绿区文本不再被离线重识别改写
         # 离线全量重识别对同段音频的输出会反复抖动（web coding/webco/
         # webcoing），若任其改写绿区头部，LLM 润色（5~7s）完成时的
         # 头部一致性校验将永远失败，绿区永远无法上屏（实测 6 连败）
@@ -336,10 +267,9 @@ class CandidateBuffer:
         场景：commit "1点44。" 后音频裁剪留了 "44" 残余，
         下次离线纠正输出 "44我今天来..." → 去掉开头 "44"。
 
-        ★ v3.2 修复：
+        ★ 历次漏网修正：
         - 忽略上次 commit 末尾的标点再匹配（重识别的残余音频不含标点）
         - 检查窗口 10 → 20 字（欠裁剪时残余可能超过 10 字）
-        ★ v3.3 修复：
         - 最小后缀降到 1 字（1~2 字残余如 "法"、"44" 之前永远漏网）
         - 同时匹配 ASR 原文尾部（LLM 润色后提交文本可能≠残余音频对应的原文）
         """
@@ -429,21 +359,21 @@ class CandidateBuffer:
             b = self._find_semantic_boundary(prefix, min_chars=5)
             if b > 0:
                 green_end = b
-            # ★ v3.8.5 避开英文词/数字中间：无标点回退和 60 字硬切分
+            # ★ 避开英文词/数字中间：无标点回退和 60 字硬切分
             #   都可能落在 ASCII 连续序列内（"lin|ux"），绿区尾部残词
-            #   会诱使 LLM 顺下文续写（v3.8.4 实录事故诱因）
+            #   会诱使 LLM 顺下文续写（实录事故诱因）
             green_end = self._snap_out_of_ascii_run(
                 list(self._chars), green_end)
 
         self._yellow_end = yellow_end
         self._green_end = green_end
-        # ★ v3.8 冻结钳制：冻结文本必须整体留在绿区内
+        # ★ 冻结钳制：冻结文本必须整体留在绿区内
         # （防语义边界对齐使绿区回缩，冻结尾部掉回黄区后又被改写）
         if self._frozen_green_len > 0:
             self._green_end = max(
                 self._green_end,
                 min(self._frozen_green_len, self._yellow_end))
-        # ★ v3.8.8 修法C：内容感知——绿区文本没变就不刷稳定时钟
+        # ★ 内容感知——绿区文本没变就不刷稳定时钟
         # （旧版无条件刷新，ASR 每 0.3s 触发一次重算，3s 稳定兜底
         # 在持续说话期间永远打不着；实录：英文无中文标点进不了
         # has_boundary 门，绿区内容 82s 未变仍零提交）
@@ -461,7 +391,7 @@ class CandidateBuffer:
         - 无 LLM：从黄区头部提交（黄区稳定头部直接 commit）
         - 有 LLM：从绿区头部提交（绿区 = LLM 润色后的稳定文本）
 
-        ★ v3.6 句子优先：relaxed=False 时只在强边界（句号/叹号/问号）处
+        ★ 句子优先：relaxed=False 时只在强边界（句号/叹号/问号）处
         切分上屏，边界后的残句留在绿区与后续新文字合并再润；
         relaxed=True（停顿超时/绿区超限）才允许逗号/语气词兜底。
         """
@@ -475,7 +405,7 @@ class CandidateBuffer:
                 return
             self._do_commit(yellow_text[:commit_point])
         else:
-            # 有 LLM（v3.7）：整个绿区送润，切点在润色结果的可靠标点上决定
+            # 有 LLM：整个绿区送润，切点在润色结果的可靠标点上决定
             # （原文标点可能有假句号/漏句号，在原文上切会把半句当整句）
             if self._green_end < self.MIN_COMMIT_CHARS:
                 return
@@ -499,7 +429,7 @@ class CandidateBuffer:
 
     @staticmethod
     def _pad_ascii_tail(text: str) -> str:
-        """★ v3.8.9 提交文本以 ASCII 句读/字母数字结尾时补一个空格。
+        """★ 提交文本以 ASCII 句读/字母数字结尾时补一个空格。
 
         英文分段提交时段间空格在 strip 链中丢失，上屏后粘连成
         "see.So"；中文全角标点结尾不受影响。"""
@@ -511,7 +441,7 @@ class CandidateBuffer:
     def _do_commit(self, text: str):
         """提交文本，弹出字符，递增计数器，通知音频裁剪。
 
-        ★ v3.8.10 记账修复：text 是 buffer 的原始前缀，弹出数必须用
+        ★ 记账修复：text 是 buffer 的原始前缀，弹出数必须用
         len(text)；strip 只用于上屏显示。旧版用 strip 后长度弹出，
         英文切点留下的头部空格会导致少弹 1 字，提交句的最后一个
         字符残留在 buffer 头部，下轮重复上屏。
@@ -537,12 +467,12 @@ class CandidateBuffer:
         self._last_commit_raw = commit_text
 
         self._last_commit_time = time.time()
-        # ★ v3.8.9 英文句读结尾补尾空格：下一段提交头部的空格在
+        # ★ 英文句读结尾补尾空格：下一段提交头部的空格在
         # strip/头部清理链中必丢，屏幕上会粘成 "see.So"
         self._notify_commit(self._pad_ascii_tail(commit_text))
 
         # ★ 通知 ASR 引擎裁剪已提交部分对应的音频
-        # v3.2: 同时传入 buffer 剩余文本（离线纠正后的权威文本），
+        # 同时传入 buffer 剩余文本（离线纠正后的权威文本），
         # 用于精确计算裁剪比例，替代易膨胀失真的 _accumulated_raw
         if self._trim_audio_callback:
             try:
@@ -589,7 +519,7 @@ class CandidateBuffer:
         self._last_commit_raw = raw_text.strip()
 
         self._last_commit_time = time.time()
-        # ★ v3.8.9 英文句读结尾补尾空格（同 _do_commit）
+        # ★ 英文句读结尾补尾空格（同 _do_commit）
         self._notify_commit(self._pad_ascii_tail(refined))
 
         # 音频裁剪：commit 权重按原文计算（与音频对应）
@@ -630,14 +560,14 @@ class CandidateBuffer:
                 self._try_commit(relaxed=True)
 
         # 有 LLM：绿区超限 → 走 _try_commit 强制提交
-        # ★ v3.4：旧版直接 _do_commit 原文绕过了 LLM 润色通道，
+        # ★ 旧版直接 _do_commit 原文绕过了 LLM 润色通道，
         # 导致 "vebco与火爆" 这类残次词原文上屏（正确润色结果晚到被丢弃）。
         # 现统一走 _try_commit → _request_refine；润色在途时静默等待，
         # 完成后 commit_refined 会连锁触发下一轮提交，绿区不会无限膨胀。
         if self._green_end > self.FORCE_COMMIT_SIZE:
             self._try_commit(relaxed=True)
 
-        # ★ v3.8.8 修法B：提交饥饿保险丝——距上次提交超 12s 且绿区
+        # ★ 提交饥饿保险丝——距上次提交超 12s 且绿区
         # 足够，说明正常提交链路被堵死（离线重解翻烙饼改写绿区，
         # 送润结果头校验连败），跳过 LLM 直接提交原文泄压。
         # 提交 → 音频裁剪 → 离线重解窗口缩短，螺旋被打断。
@@ -668,7 +598,7 @@ class CandidateBuffer:
 
     @classmethod
     def _ascii_boundary_kind(cls, text: str, i: int) -> Optional[str]:
-        """★ v3.8.9 ASCII 句读边界判定（带数字/缩写保护）。
+        """★ ASCII 句读边界判定（带数字/缩写保护）。
 
         '.'/',' 后面紧跟 ASCII 字母数字时不算边界：
         24.04 / 3.5 / 1,000 / U.S.A / example.com 都不能从中间切；
@@ -720,7 +650,7 @@ class CandidateBuffer:
                 return i + 1
             if text[i] in self.WEAK_BOUNDARIES and i > min_chars + 5:
                 return i + 1
-            # ★ v3.8.9 ASCII 句读（带数字保护）
+            # ★ ASCII 句读（带数字保护）
             kind = self._ascii_boundary_kind(text, i)
             if kind == 'strong':
                 return i + 1
@@ -735,7 +665,7 @@ class CandidateBuffer:
     def _find_commit_point(self, green_text: str, relaxed: bool = False) -> int:
         """在绿区文本中找提交点。
 
-        ★ v3.6 句子优先策略：
+        ★ 句子优先策略：
         1. 从尾部回溯找最后一个强边界（。！？；）→ 整句上屏，
            边界后残句留在绿区与后续新文字合并再润（周而复始）
         2. 无强边界且未放宽 → 继续等待（不用逗号碎片强切）
@@ -781,8 +711,8 @@ class CandidateBuffer:
         self._showing_placeholder = True
 
 
-class PTTPipelineV3:
-    """PTT 语音识别流水线 v3.6"""
+class PTTPipeline:
+    """PTT 语音识别流水线 """
 
     LLM_REFINE_TIMEOUT = 8.0   # 绿区润色超时（秒），超时回退提交原文
     LLM_FINAL_TIMEOUT = 6.0    # 松手终审超时（秒）——真实 LLM 单次 5~7s，3s 永远吃不到结果
@@ -791,7 +721,7 @@ class PTTPipelineV3:
                                 # 切段主要为并行降尾延，35 字兼顾跨段衔接质量
     PREV_CONTEXT_CHARS = 40    # 送润时携带的已定稿上文尾部长度
     NEXT_CONTEXT_CHARS = 30    # 送润时携带的后续粗识别下文长度
-    # ★ v3.8.7 双层上下文：紧邻上文管拼接，前文参考管用词一致性
+    # ★ 双层上下文：紧邻上文管拼接，前文参考管用词一致性
     #   （实录："手冲"上屏 110s 后 ASR 吐"首充"，40 字窗口早已
     #   遗忘锚点，LLM 孤立看"首充"完全合法，无理由改写）
     BACKGROUND_CONTEXT_CHARS = 500  # 前文参考滑窗长度（≈最近 2 分钟定稿）
@@ -866,7 +796,7 @@ class PTTPipelineV3:
     def _schedule_refine(self, raw_text: str, relaxed: bool = False):
         """绿区就绪时由 buffer._try_commit 同步调用：调度异步润色任务。
 
-        v3.7: raw_text 是整个绿区原文，提交切点由润色结果决定。
+        raw_text 是整个绿区原文，提交切点由润色结果决定。
         """
         if self._finalizing:
             return
@@ -894,10 +824,10 @@ class PTTPipelineV3:
                 self.buffer._do_commit(raw_text[:cut])
 
     def _background_context(self) -> str:
-        """★ v3.8.7 前文参考：紧邻上文之前的已定稿文本滑窗。
+        """★ 前文参考：紧邻上文之前的已定稿文本滑窗。
 
         与紧邻上文物理隔开：拼接上文要暗示 LLM "输出接在这后面"，
-        参考上文恰恰要切断这种暗示（防抄写，v3.8.4 血泪）。"""
+        参考上文恰恰要切断这种暗示（防抄写，血泪）。"""
         return self._committed_tail[:-self.PREV_CONTEXT_CHARS][
             -self.BACKGROUND_CONTEXT_CHARS:]
 
@@ -919,7 +849,7 @@ class PTTPipelineV3:
                 if refined.startswith(base[-n:]):
                     refined = refined[n:].lstrip('。，！？；、：,.!?;: ')
                     break
-        # ★ v3.8.4 下文头部回显：LLM 把 next_context 开头续写进了输出尾部
+        # ★ 下文头部回显：LLM 把 next_context 开头续写进了输出尾部
         #   （典型诱因：待校对段尾部是残词，模型顺着下文补全）
         tail = next_ctx.lstrip('。，！？；、：,.!?;: ')
         if tail:
@@ -972,7 +902,7 @@ class PTTPipelineV3:
                                  bg_ctx: str = ""):
         """LLM 润色整个绿区，在润色结果上切句提交；超时/失败回退原文切分。
 
-        v3.7 流程：
+        流程：
         1. 整个绿区原文 + 上下文 → LLM 润色
         2. 在润色结果（标点可靠）上找最后一个强边界作切点
         3. difflib 将切点映射回原文位置 r：提交润色前段、弹出原文前 r 字
@@ -1016,7 +946,7 @@ class PTTPipelineV3:
         if r <= 0:
             return
 
-        # ★ v3.8.4 越界提交守卫：用 r 字原文只能兑换相近长度的润色文本。
+        # ★ 越界提交守卫：用 r 字原文只能兑换相近长度的润色文本。
         #   若 b 远超 r，说明模型把 next_context 抄进了输出（漏网之鱼），
         #   直接提交会把还在黄区的内容提前上屏 → 黄区成熟后重复提交
         #   （实录：raw 21 字兑换 38 字，"叫做雨。/叫做宇皇"双重上屏）
@@ -1041,7 +971,7 @@ class PTTPipelineV3:
     async def finalize(self):
         """PTT 松键：所有剩余文本推绿，尝试 LLM 润色，提交。
 
-        ★ v3.3：全程持有 _finalizing 锁 —— LLM 等待期间离线纠正/应急定时器
+        ★ 全程持有 _finalizing 锁 —— LLM 等待期间离线纠正/应急定时器
         不得再改写或提交 buffer，否则终审快照会把已提交内容重复上屏。
         """
         self._finalizing = True
@@ -1093,14 +1023,14 @@ class PTTPipelineV3:
         单请求耗时 ≈ 网络往返 + 输出 token 流式解码（实测约 10 字/s），
         短段并行才能在超时预算内吐完。
     
-        ★ v3.8.1 部分抢救：不再全有全无——按段收割结果，超时未完成的段
+        ★ 部分抢救：不再全有全无——按段收割结果，超时未完成的段
         才回退原文（旧版 gather 整体超时，98 字全部原文上屏，
         "物邦图/LLOM/泛ASR" 就是这么漏过去的）。
         """
         chunks = self._split_final_chunks(raw)
         # ★ 跨段衔接：每段都带上文（已定稿尾部 / 前一 chunk 原文尾部）
         # 和下文（后一 chunk 头部），并行请求互不等待
-        # ★ v3.8.7 前文参考全段共用（会话内用词一致性锚点）
+        # ★ 前文参考全段共用（会话内用词一致性锚点）
         bg_ctx = self._background_context()
         prev_ctxs, next_ctxs = [], []
         for i, c in enumerate(chunks):
@@ -1183,7 +1113,7 @@ class PTTPipelineV3:
         这里通过 create_task 将异步 broadcast 调度到 event loop。
         """
         if text:
-            # ★ 累积已定稿文本（v3.8.7：容量扩到 800 字，尾部 40 字供
+            # ★ 累积已定稿文本（容量扩到 800 字，尾部 40 字供
             # 拼接，更早部分作前文参考——用词一致性锚点）
             self._committed_tail = (
                 self._committed_tail + text)[-self.COMMITTED_TAIL_CAP:]

@@ -63,7 +63,7 @@ inline void YuHuangState::reset() {
     ic_->updatePreedit();
 }
 
-// ---- v3.1 分段预编辑（应用内嵌 + 格式标记 + 光标跟踪）----
+// ---- 分段预编辑（应用内嵌 + 格式标记 + 光标跟踪）----
 
 inline void YuHuangState::updatePreedit(const std::vector<TextSegment> &segments) {
     if (!ic_) return;

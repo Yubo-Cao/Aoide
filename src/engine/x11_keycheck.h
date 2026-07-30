@@ -3,11 +3,11 @@
 
 namespace yuhuang {
 
-// ★ v3.8.11 PTT 看门狗底座（v2）：XInput2 raw 事件监听物理键盘。
+// ★ PTT 看门狗底座：XInput2 raw 事件监听物理键盘。
 //
 // 背景：GNOME 键盘 grab（通知弹窗/Overview 等）会吞掉松键事件，
 // 实录 5.5 分钟会话中物理松键+补按均未送达 fcitx，导致 PTT 卡死。
-// v3.8.10 曾用 XQueryKeymap 轮询，但它返回的是"逻辑键位状态"——
+// 曾用 XQueryKeymap 轮询，但它返回的是"逻辑键位状态"——
 // 同步 grab 冻结事件处理时逻辑状态同样滞留在"按下"（X11 规范原文：
 // "the logical state may lag the physical state if device event
 // processing is frozen"），探测器和事件流死在同一把刀下，实测失效。
