@@ -34,6 +34,14 @@ Thumbs.db
 # Backend runtime
 *.sock
 
+# Local-only: test assets, dev notes (never commit)
+res/
+tests/
+src/tools/test_pipeline.py
+*.bundle
+/20260719.md
+/kimi_direction_v2.md
+
 # Logs
 *.log
 *.log.*

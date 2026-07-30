@@ -16,6 +16,7 @@
 #include <atomic>
 #include <functional>
 #include <fcitx-utils/eventdispatcher.h>
+#include <fcitx-utils/event.h>
 
 namespace yuhuang {
 
@@ -231,6 +232,13 @@ private:
     void checkSystemConflict(const fcitx::Key &key);
     void sendConfigToBackend();
 
+    // ★ v3.8.10 PTT 停止统一入口 + 物理键盘看门狗
+    // 背景：GNOME 合成器键盘 grab 会吞掉松键事件（实录 5.5 分钟卡麦），
+    // 引擎侧永远等不到 release，须主动向 X server 轮询物理键位状态。
+    void stopListeningInternal(const char *reason);
+    void startPttWatchdog();
+    void stopPttWatchdog();
+
     fcitx::Instance *instance_;
     fcitx::FactoryFor<YuHuangState> factory_;
     YuHuangConfig config_;
@@ -239,6 +247,10 @@ private:
     fcitx::Key triggerKey_;
     bool listening_ = false;
     bool triggerPressed_ = false;
+
+    // ★ v3.8.10 看门狗：200ms 轮询 XQueryKeymap，连续 2 次未按下判定丢松键
+    std::unique_ptr<fcitx::EventSourceTime> pttWatchdog_;
+    int watchdogMisses_ = 0;
 
     // 后端客户端
     std::unique_ptr<BackendClient> backend_;

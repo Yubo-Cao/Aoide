@@ -1,6 +1,7 @@
 # 生成 yuhuang.so (不带 lib 前缀)
 add_library(yuhuang SHARED
     yuhuang_engine.cpp
+    x11_keycheck.cpp
 )
 
 target_link_libraries(yuhuang PRIVATE
@@ -8,6 +9,25 @@ target_link_libraries(yuhuang PRIVATE
     Fcitx5::Config
     Fcitx5::Utils
 )
+
+# ★ v3.8.11 PTT 看门狗依赖 Xlib + XInput2（raw 事件监听物理键盘，
+# grab 冻结期间照常投递；XQueryKeymap 作辅助通道）。
+# 找不到时逐级降级：无 Xi 则只用键位图，无 X11 则看门狗不启用。
+find_package(X11)
+if(X11_FOUND)
+    target_include_directories(yuhuang PRIVATE ${X11_INCLUDE_DIR})
+    target_link_libraries(yuhuang PRIVATE ${X11_LIBRARIES})
+    target_compile_definitions(yuhuang PRIVATE YUHUANG_HAVE_X11)
+    if(X11_Xi_FOUND)
+        target_link_libraries(yuhuang PRIVATE ${X11_Xi_LIB})
+        target_compile_definitions(yuhuang PRIVATE YUHUANG_HAVE_XI2)
+        message(STATUS "YuHuang: X11+Xi found, PTT watchdog with XI2 raw events")
+    else()
+        message(STATUS "YuHuang: X11 found (no Xi), PTT watchdog keymap-only")
+    endif()
+else()
+    message(STATUS "YuHuang: X11 not found, PTT watchdog disabled")
+endif()
 
 target_include_directories(yuhuang PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}

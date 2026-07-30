@@ -233,6 +233,14 @@ def main():
 
     # PTT handlers
     async def on_start_listening():
+        # ★ v3.8.10 防重入：已在监听时的重复 start（典型场景：合成器
+        # 吞掉松键事件后用户补按触发键救援）绝不能 reset 洗掉
+        # 进行中的会话，直接忽略
+        if audio_capture.is_listening:
+            logger.warning(
+                "start_listening ignored: already listening "
+                "(duplicate PTT press, release event likely lost)")
+            return
         audio_capture.start_listening()
         _pipeline.reset()
         if asr_engine:

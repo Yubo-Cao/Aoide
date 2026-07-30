@@ -1,5 +1,31 @@
 """YuHuang PTT Pipeline v3.8 — 三区间字符串模型 + 增量音频裁剪 + 润色结果切句提交
 
+v3.8.10 变更摘要:
+  - _do_commit 记账 off-by-one 修复：弹出数改用原始前缀长度 len(text)，
+    strip 只用于上屏显示。旧版用 strip 后长度弹出，英文切点留下的
+    头部空格会导致少弹 1 字，提交句末字符残留 buffer 头重复上屏
+  - （配套 asr_engine 修复）ASCII 字母音频权重 1.5→0.3，根治英文
+    提交超裁音频砍头后续中文（"OK这次我们用中文聊聊吧"蒸发事故）
+  - （配套 engine/main 修复）PTT 丢失松键三层防御：X11 物理键盘
+    看门狗 + 重复按下救援 + 后端 start 防重入
+
+v3.8.9 变更摘要:
+  - ASCII 句读边界（. ! ? ; 强 / , 中）+ 数字保护（24.04 / 1,000 不切）：
+    旧版三套边界字符集全是中文标点，英文/中英混说段落对提交机器
+    "边界失明"：黄区边界钉死在硬切兜底 60 字处，红区无限堆积（实录
+    1089 字），has_boundary/_refined_cut 全灭，只剩 12s 保险丝泄压
+  - 英文句读结尾的提交自动补尾空格（屏幕上 "see.So" → "see. So"，
+    中文全角标点不受影响）
+
+v3.8.8 变更摘要:
+  - 修法C 内容感知稳定时钟：_last_green_modified 只在绿区文本真的
+    变化时刷新（旧版每次 _recalc_zones 无条件刷新，ASR 每 0.3s 更新
+    一次 → 3s 稳定兜底永远打不着；实录：英文会话绿区内容 82s 纹丝
+    不动仍零提交）
+  - 修法B 提交饥饿保险丝：距上次提交超 12s 且绿区足够 → 跳过 LLM
+    直接提交原文泄压（死亡螺旋下提交断流 → 音频零裁剪 → SenseVoice
+    超长解码截断丢文；烂句上屏 > 句子蒸发）
+
 v3.8.7 变更摘要:
   - 双层上下文：紧邻上文（40 字，管拼接）之外新增前文参考
     （≤500 字滑窗，管用词一致性）；修实录：同一视频前段已定稿
@@ -82,11 +108,17 @@ class CandidateBuffer:
     STABLE_TIME_THRESHOLD = 3.0  # 绿区稳定超时兜底（长停顿场景）
     FORCE_COMMIT_SIZE = 60     # 绿区超限强制提交
     YELLOW_STABLE_TIMEOUT = 3.0  # 黄区稳定超时推绿（长停顿场景）
+    # ★ v3.8.8 修法B：距上次提交超时 → 绕过 LLM 强制泄压提交
+    COMMIT_STARVATION_TIMEOUT = 12.0
 
     # 语义边界字符集
     STRONG_BOUNDARIES = frozenset({'。', '！', '？', '；', '\n'})
     MEDIUM_BOUNDARIES = frozenset({'，', '、', '：'})
     WEAK_BOUNDARIES = frozenset({'呢', '啊', '吧', '吗', '嘛', '哦', '哈'})
+    # ★ v3.8.9 ASCII 句读（位置相关，需配合 _ascii_boundary_kind 的
+    # 数字保护使用，不直接并入上面的集合）
+    ASCII_STRONG = frozenset({'.', '!', '?', ';'})
+    ASCII_MEDIUM = frozenset({','})
 
     def __init__(self):
         self._chars: deque[str] = deque()
@@ -97,6 +129,8 @@ class CandidateBuffer:
         self._last_commit_raw: str = ""          # 最近一次提交对应的 ASR 原文（去重匹配用）
         self._last_yellow_modified: float = 0
         self._last_green_modified: float = 0
+        # ★ v3.8.8 修法C：绿区内容快照，时间戳只在内容真变时刷新
+        self._last_green_snapshot: str = ""
         self._last_commit_time: float = time.time()
         self._showing_placeholder: bool = False
 
@@ -409,7 +443,14 @@ class CandidateBuffer:
             self._green_end = max(
                 self._green_end,
                 min(self._frozen_green_len, self._yellow_end))
-        self._last_green_modified = time.time()
+        # ★ v3.8.8 修法C：内容感知——绿区文本没变就不刷稳定时钟
+        # （旧版无条件刷新，ASR 每 0.3s 触发一次重算，3s 稳定兜底
+        # 在持续说话期间永远打不着；实录：英文无中文标点进不了
+        # has_boundary 门，绿区内容 82s 未变仍零提交）
+        green_now = ''.join(list(self._chars)[:self._green_end])
+        if green_now != self._last_green_snapshot:
+            self._last_green_snapshot = green_now
+            self._last_green_modified = time.time()
 
     # ============ 提交 ============
 
@@ -445,7 +486,9 @@ class CandidateBuffer:
                 has_boundary = any(
                     (c in self.STRONG_BOUNDARIES
                      or c in self.MEDIUM_BOUNDARIES
-                     or c in self.WEAK_BOUNDARIES) for c in green)
+                     or c in self.WEAK_BOUNDARIES) for c in green) or any(
+                    self._ascii_boundary_kind(green, i)
+                    for i in range(len(green)))
                 if has_boundary or relaxed or len(green) >= self.FORCE_COMMIT_SIZE:
                     self._request_refine(green, relaxed)
             else:
@@ -454,41 +497,56 @@ class CandidateBuffer:
                 if commit_point > 0:
                     self._do_commit(green[:commit_point])
 
+    @staticmethod
+    def _pad_ascii_tail(text: str) -> str:
+        """★ v3.8.9 提交文本以 ASCII 句读/字母数字结尾时补一个空格。
+
+        英文分段提交时段间空格在 strip 链中丢失，上屏后粘连成
+        "see.So"；中文全角标点结尾不受影响。"""
+        if text and text[-1].isascii() and (
+                text[-1].isalnum() or text[-1] in '.!?;,'):
+            return text + ' '
+        return text
+
     def _do_commit(self, text: str):
         """提交文本，弹出字符，递增计数器，通知音频裁剪。
 
-        ★ 关键修复：
-        - commit_len 使用 strip 后的长度，与实际提交文本一致
+        ★ v3.8.10 记账修复：text 是 buffer 的原始前缀，弹出数必须用
+        len(text)；strip 只用于上屏显示。旧版用 strip 后长度弹出，
+        英文切点留下的头部空格会导致少弹 1 字，提交句的最后一个
+        字符残留在 buffer 头部，下轮重复上屏。
         - 提交后通过 _trim_audio_callback 通知 ASR 引擎裁剪音频
         - preedit 不再包含已提交内容（即提交即清空）
         """
         if not text or not text.strip():
             return
 
-        commit_text = text.strip()
-        commit_len = len(commit_text)  # ★ 用 strip 后长度，保证弹出数一致
+        commit_text = text.strip()   # 上屏显示用
+        pop_len = len(text)          # ★ 弹出/区间位移用原始前缀长度
 
-        for _ in range(commit_len):
+        for _ in range(pop_len):
             if self._chars:
                 self._chars.popleft()
 
-        self._green_end = max(0, self._green_end - commit_len)
-        self._yellow_end = max(self._green_end, self._yellow_end - commit_len)
-        self._frozen_green_len = max(0, self._frozen_green_len - commit_len)
+        self._green_end = max(0, self._green_end - pop_len)
+        self._yellow_end = max(self._green_end, self._yellow_end - pop_len)
+        self._frozen_green_len = max(0, self._frozen_green_len - pop_len)
 
-        self._committed_chars += commit_len
+        self._committed_chars += len(commit_text)
         self._last_commit_text = commit_text
         self._last_commit_raw = commit_text
 
         self._last_commit_time = time.time()
-        self._notify_commit(commit_text)
+        # ★ v3.8.9 英文句读结尾补尾空格：下一段提交头部的空格在
+        # strip/头部清理链中必丢，屏幕上会粘成 "see.So"
+        self._notify_commit(self._pad_ascii_tail(commit_text))
 
         # ★ 通知 ASR 引擎裁剪已提交部分对应的音频
         # v3.2: 同时传入 buffer 剩余文本（离线纠正后的权威文本），
         # 用于精确计算裁剪比例，替代易膨胀失真的 _accumulated_raw
         if self._trim_audio_callback:
             try:
-                self._trim_audio_callback(commit_len, commit_text, self.full_text)
+                self._trim_audio_callback(pop_len, commit_text, self.full_text)
             except Exception:
                 logger.warning("trim_audio_callback failed", exc_info=True)
 
@@ -531,7 +589,8 @@ class CandidateBuffer:
         self._last_commit_raw = raw_text.strip()
 
         self._last_commit_time = time.time()
-        self._notify_commit(refined)
+        # ★ v3.8.9 英文句读结尾补尾空格（同 _do_commit）
+        self._notify_commit(self._pad_ascii_tail(refined))
 
         # 音频裁剪：commit 权重按原文计算（与音频对应）
         if self._trim_audio_callback:
@@ -578,7 +637,57 @@ class CandidateBuffer:
         if self._green_end > self.FORCE_COMMIT_SIZE:
             self._try_commit(relaxed=True)
 
+        # ★ v3.8.8 修法B：提交饥饿保险丝——距上次提交超 12s 且绿区
+        # 足够，说明正常提交链路被堵死（离线重解翻烙饼改写绿区，
+        # 送润结果头校验连败），跳过 LLM 直接提交原文泄压。
+        # 提交 → 音频裁剪 → 离线重解窗口缩短，螺旋被打断。
+        # 有意绕过润色通道：饥饿本身就是润色链路失效的证据，
+        # 在途润色返回后头校验失败会被 commit_refined 正常丢弃。
+        if (now - self._last_commit_time > self.COMMIT_STARVATION_TIMEOUT
+                and self._green_end > 0
+                and (self._green_end >= self.MIN_COMMIT_CHARS
+                     or len(self._chars) >= self.FORCE_COMMIT_SIZE)):
+            # 绿区可能被语义边界对齐压到 20 字以下，但 buffer 已膨胀
+            # ——压力存在就得泄，提交多少算多少
+            green = self.green_text
+            cut = self._find_commit_point(green, relaxed=True)
+            if cut <= 0:
+                cut = min(len(green), self.FORCE_COMMIT_SIZE)
+            # 统一退出 ASCII 词中间（_find_commit_point 的 60 字硬切
+            # 也可能落在英文词内）；退到 0 则整绿区提交
+            # （绿区边界本身已经 _snap 保证词完整）
+            cut = self._snap_out_of_ascii_run(list(green), cut) or len(green)
+            logger.warning(
+                f"Commit starvation: "
+                f"{now - self._last_commit_time:.0f}s since last commit, "
+                f"force-committing {cut}/{len(green)} raw chars "
+                f"(pressure release)")
+            self._do_commit(green[:cut])
+
     # ============ 语义边界 ============
+
+    @classmethod
+    def _ascii_boundary_kind(cls, text: str, i: int) -> Optional[str]:
+        """★ v3.8.9 ASCII 句读边界判定（带数字/缩写保护）。
+
+        '.'/',' 后面紧跟 ASCII 字母数字时不算边界：
+        24.04 / 3.5 / 1,000 / U.S.A / example.com 都不能从中间切；
+        '!'/'?'/';' 无此类歧义，直接算强边界。
+        返回 'strong' / 'medium' / None。
+        """
+        ch = text[i]
+        if ch in cls.ASCII_STRONG:
+            if ch == '.':
+                nxt = text[i + 1] if i + 1 < len(text) else ''
+                if nxt and nxt.isascii() and nxt.isalnum():
+                    return None
+            return 'strong'
+        if ch in cls.ASCII_MEDIUM:
+            nxt = text[i + 1] if i + 1 < len(text) else ''
+            if nxt and nxt.isascii() and nxt.isalnum():
+                return None
+            return 'medium'
+        return None
 
     @staticmethod
     def _snap_out_of_ascii_run(chars, pos: int) -> int:
@@ -611,6 +720,12 @@ class CandidateBuffer:
                 return i + 1
             if text[i] in self.WEAK_BOUNDARIES and i > min_chars + 5:
                 return i + 1
+            # ★ v3.8.9 ASCII 句读（带数字保护）
+            kind = self._ascii_boundary_kind(text, i)
+            if kind == 'strong':
+                return i + 1
+            if kind == 'medium' and i > min_chars + 5:
+                return i + 1
 
         # 无标点回退：长文本硬切分（防止连续语音永不提交）
         if len(text) >= self.FORCE_COMMIT_SIZE:
@@ -629,7 +744,8 @@ class CandidateBuffer:
         """
         # 1) 句子优先：最后一个强边界（至少成句 5 字）
         for i in range(len(green_text) - 1, 4, -1):
-            if green_text[i] in self.STRONG_BOUNDARIES:
+            if (green_text[i] in self.STRONG_BOUNDARIES
+                    or self._ascii_boundary_kind(green_text, i) == 'strong'):
                 return i + 1
 
         # 2) 无强边界：未放宽且未超限 → 等更多文本
@@ -823,13 +939,15 @@ class PTTPipelineV3:
         """
         CB = CandidateBuffer
         for i in range(len(refined) - 1, 4, -1):
-            if refined[i] in CB.STRONG_BOUNDARIES:
+            if (refined[i] in CB.STRONG_BOUNDARIES
+                    or CB._ascii_boundary_kind(refined, i) == 'strong'):
                 return i + 1
         if not (relaxed or overflowed):
             return 0
         for i in range(len(refined) - 1, 4, -1):
             if (refined[i] in CB.MEDIUM_BOUNDARIES
-                    or refined[i] in CB.WEAK_BOUNDARIES):
+                    or refined[i] in CB.WEAK_BOUNDARIES
+                    or CB._ascii_boundary_kind(refined, i) == 'medium'):
                 return i + 1
         return len(refined) if overflowed else 0
 

@@ -243,7 +243,13 @@ class ASREngine:
         def _char_weight(c: str) -> float:
             if c.isascii():
                 if c.isalnum():
-                    return 1.5   # ASCII 字母数字：发音更长
+                    # ★ v3.8.10: 1.5 → 0.3。旧值按中文语境逐字母拼读校准
+                    # （"F-C-I-T-X"每个字母读满 1.5 拍），但连读英文
+                    # 每秒飞过 12+ 字母，权重虚高导致超裁；实录：提交
+                    # 152 字英文裁掉 73.5% 音频，多砍 ~4s，把后续中文
+                    # "OK这次我们用中文聊聊吧…"整句砍头蒸发。
+                    # 宁欠勿过：欠裁剪由文本去重兜底，过裁剪无法恢复
+                    return 0.3
                 else:
                     return 0.0   # ASCII 标点/空白：不发音
             else:

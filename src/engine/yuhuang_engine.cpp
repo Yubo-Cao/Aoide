@@ -1,6 +1,7 @@
 #include "yuhuang_engine.h"
 #include "yuhuang_state.h"
 #include "yuhuang_socket.h"
+#include "x11_keycheck.h"
 #include <fcitx/inputpanel.h>
 #include <fcitx/event.h>
 #include <fcitx-config/iniparser.h>
@@ -9,8 +10,29 @@
 #include <sstream>
 #include <algorithm>
 #include <unordered_set>
+#include <ctime>
 
 namespace yuhuang {
+
+// ★ v3.8.11 PTT 关键事件日志落盘：fcitx5 手动重启后 stdout 常接在
+// 已销毁的终端上（两次卡麦事故的引擎日志全部丢失），取证必须不依赖终端。
+static void logPtt(const std::string &msg) {
+    std::cout << "[YuHuang] " << msg << std::endl;
+    static std::ofstream f;
+    if (!f.is_open()) {
+        const char *home = std::getenv("HOME");
+        if (home) {
+            f.open(std::string(home) + "/.config/yuhuang/engine.log",
+                   std::ios::app);
+        }
+    }
+    if (f.is_open()) {
+        char buf[32];
+        std::time_t t = std::time(nullptr);
+        std::strftime(buf, sizeof(buf), "%F %T", std::localtime(&t));
+        f << buf << " " << msg << std::endl;
+    }
+}
 
 // Known system shortcut conflicts (GNOME / KDE common)
 static const std::unordered_set<std::string> kKnownConflicts = {
@@ -215,6 +237,7 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
 }
 
 YuHuangEngine::~YuHuangEngine() {
+    stopPttWatchdog();
     if (backend_) {
         backend_->disconnect();
     }
@@ -255,12 +278,67 @@ void YuHuangEngine::deactivate(const fcitx::InputMethodEntry &entry,
     std::cout << "[YuHuang] Deactivated on: "
               << (ic ? ic->program() : "?") << std::endl;
 
-    if (listening_) {
-        listening_ = false;
-        if (backend_ && backend_->isConnected()) {
-            backend_->sendCommand("{\"type\":\"stop_listening\"}");
-        }
+    // ★ v3.8.10 统一走 stopListeningInternal（顺带修复旧版不清
+    // triggerPressed_ 的潜伏 bug：焦点切走后引擎仍认为触发键按着）
+    stopListeningInternal("focus-out");
+}
+
+// ---- ★ v3.8.10 PTT 停止统一入口与物理键盘看门狗 ----
+
+void YuHuangEngine::stopListeningInternal(const char *reason) {
+    // 注意：不在这里销毁 pttWatchdog_——本函数可能在看门狗自身回调内
+    // 被调用，回调内销毁自身事件源是 UB。回调见 !triggerPressed_
+    // 后不续期自然停摆，下次 startPttWatchdog 会 reset 重建。
+    triggerPressed_ = false;
+    watchdogMisses_ = 0;
+    x11WatchKeyEnd();  // 退订 raw 事件，防止在连接上无限堆积
+    if (!listening_) return;
+    listening_ = false;
+    logPtt(std::string("PTT: stop listening (") + reason + ")");
+    if (backend_ && backend_->isConnected()) {
+        backend_->sendCommand("{\"type\":\"stop_listening\"}");
     }
+}
+
+void YuHuangEngine::startPttWatchdog() {
+    // X11 不可用（Wayland 会话/无 DISPLAY）时不启用，保留另外两层防御
+    if (x11WatchKeyBegin(triggerKey_.sym()) < 0) {
+        logPtt("PTT watchdog unavailable (no X11), "
+               "rescue-press is the only defense");
+        return;
+    }
+
+    watchdogMisses_ = 0;
+    pttWatchdog_.reset();  // 销毁旧事件源（此时不在其回调内，安全）
+    pttWatchdog_ = instance_->eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + 200000, 10000,
+        [this](fcitx::EventSourceTime *source, uint64_t) {
+            if (!triggerPressed_) {
+                return true;  // 已正常停止：不续期，自然停摆
+            }
+            int down = x11WatchKeyPoll();
+            if (down == 0) {
+                // 连续 2 次（~400ms）未按下才判定丢松键，防瞬时竞态
+                if (++watchdogMisses_ >= 2) {
+                    logPtt("PTT watchdog: physical key released "
+                           "but no release event received "
+                           "(grabbed by compositor?) -> force stop");
+                    stopListeningInternal("watchdog");
+                    return true;  // 已停止，不续期
+                }
+            } else {
+                watchdogMisses_ = 0;  // 仍按着（或查询失败）：重置计数
+            }
+            source->setNextInterval(200000);  // 续期 200ms
+            source->setOneShot();
+            return true;
+        });
+}
+
+void YuHuangEngine::stopPttWatchdog() {
+    // 仅供回调外部使用（析构/重配置）；回调内部靠不续期自然停摆
+    pttWatchdog_.reset();
+    watchdogMisses_ = 0;
 }
 
 // ---- Key Event (PTT Core) ----
@@ -296,25 +374,29 @@ void YuHuangEngine::keyEvent(const fcitx::InputMethodEntry &entry,
     if (key.sym() == triggerKey_.sym()) {
         if (isRelease) {
             if (triggerPressed_) {
-                triggerPressed_ = false;
-                std::cout << "[YuHuang] PTT: trigger released -> stop listening"
-                          << std::endl;
-                if (listening_) {
-                    listening_ = false;
-                    if (backend_ && backend_->isConnected()) {
-                        backend_->sendCommand("{\"type\":\"stop_listening\"}");
-                    }
-                }
+                logPtt("PTT: trigger released");
+                stopListeningInternal("release");
                 keyEvent.filterAndAccept();
             }
         } else {
+            // ★ v3.8.10 重复按下救援：修饰键无自动重复，triggerPressed_
+            // 已真时再收到按下 = 松键事件被合成器吞了，用户在补按
+            // 救援 -> 当停止处理。限定 isModifier()：非修饰触发键有
+            // 自动重复，会误杀正常长按。
+            if (triggerPressed_ && key.isModifier()) {
+                logPtt("PTT: duplicate press while held "
+                       "(release event was lost) -> rescue stop");
+                stopListeningInternal("rescue-press");
+                keyEvent.filterAndAccept();
+                return;
+            }
             triggerPressed_ = true;
             listening_ = true;
-            std::cout << "[YuHuang] PTT: trigger pressed -> start listening"
-                      << std::endl;
+            logPtt("PTT: trigger pressed -> start listening");
             if (backend_ && backend_->isConnected()) {
                 backend_->sendCommand("{\"type\":\"start_listening\"}");
             }
+            startPttWatchdog();  // ★ v3.8.10 监控物理键位，防松键事件丢失
             keyEvent.filterAndAccept();
         }
         return;
