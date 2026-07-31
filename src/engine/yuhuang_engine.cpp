@@ -2,6 +2,9 @@
 #include "yuhuang_state.h"
 #include "yuhuang_socket.h"
 #include "x11_keycheck.h"
+#ifdef YUHUANG_HAVE_PANEL
+#include "yuhuang_window.h"
+#endif
 #include <fcitx/inputpanel.h>
 #include <fcitx/event.h>
 #include <fcitx-config/iniparser.h>
@@ -480,6 +483,40 @@ YuHuangState *YuHuangEngine::currentState() {
     auto *focusedIC = instance_->lastFocusedInputContext();
     if (!focusedIC) return nullptr;
     return focusedIC->propertyFor(&factory_);
+}
+
+// ---- 自绘悬浮窗 ----
+PanelWindow *YuHuangEngine::panel() {
+#ifdef YUHUANG_HAVE_PANEL
+    if (!panelTried_) {
+        panelTried_ = true;   // 只试一次，连不上 X 就永远走候选栏回退
+        auto w = std::make_unique<PanelWindow>();
+        if (w->available()) {
+            panelWindow_ = std::move(w);
+            // Expose 重绘等 X 事件挂在 fcitx 主事件循环里处理
+            panelIO_ = instance_->eventLoop().addIOEvent(
+                panelWindow_->fd(), fcitx::IOEventFlag::In,
+                [this](fcitx::EventSourceIO *, int, fcitx::IOEventFlags) {
+                    panelWindow_->processEvents();
+                    return true;
+                });
+            logPtt("panel: self-drawn floating window ready");
+        } else {
+            logPtt("panel: X unavailable, fall back to candidate bar");
+        }
+    }
+    return panelWindow_.get();
+#else
+    return nullptr;
+#endif
+}
+
+PanelWindow *YuHuangEngine::panelIfCreated() {
+#ifdef YUHUANG_HAVE_PANEL
+    return panelWindow_.get();
+#else
+    return nullptr;
+#endif
 }
 
 // Register addon factory

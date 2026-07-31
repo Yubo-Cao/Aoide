@@ -29,6 +29,23 @@ else()
     message(STATUS "YuHuang: X11 not found, PTT watchdog disabled")
 endif()
 
+# ★ 自绘悬浮草稿窗依赖 cairo + pango（三区淡染底色 classicui 画不出来）
+# 和 Xext（XShape 点击穿透）。找不到则不编这一路，运行时回退候选栏。
+find_package(PkgConfig QUIET)
+if(PKG_CONFIG_FOUND AND X11_FOUND AND X11_Xext_FOUND)
+    pkg_check_modules(PANEL IMPORTED_TARGET cairo cairo-xlib pangocairo)
+    if(PANEL_FOUND)
+        target_sources(yuhuang PRIVATE yuhuang_window.cpp)
+        target_link_libraries(yuhuang PRIVATE PkgConfig::PANEL ${X11_Xext_LIB})
+        target_compile_definitions(yuhuang PRIVATE YUHUANG_HAVE_PANEL)
+        message(STATUS "YuHuang: cairo/pango found, self-drawn floating panel enabled")
+    else()
+        message(STATUS "YuHuang: cairo/pango not found, floating panel falls back to candidate bar")
+    endif()
+else()
+    message(STATUS "YuHuang: pkg-config/Xext missing, floating panel falls back to candidate bar")
+endif()
+
 target_include_directories(yuhuang PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )

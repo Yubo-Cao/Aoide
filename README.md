@@ -23,7 +23,7 @@
 
 > **你还在用那种"录音→识别→复制→粘贴"的语音工具吗？试试真正的输入法。**
 
-语皇 (YuHuang) 是一个基于 **fcitx5** 输入法框架的 Linux 语音输入法。它不是那种打开一个独立窗口、识别完了还得自己 Ctrl+C / Ctrl+V 的工具——它是**真正的输入法**。按住按键说话，候选框就在光标下方逐字浮现，松手即上屏，就像你用搜狗拼音打字一样自然。
+语皇 (YuHuang) 是一个基于 **fcitx5** 输入法框架的 Linux 语音输入法。它不是那种打开一个独立窗口、识别完了还得自己 Ctrl+C / Ctrl+V 的工具——它是**真正的输入法**。按住按键说话，悬浮草稿窗就在光标下方逐字浮现，松手即上屏，就像你用搜狗拼音打字一样自然。
 
 ---
 
@@ -59,6 +59,16 @@
 
 核心创新在于 **LCP（最长公共前缀）增量提交机制**：离线模型每次修正后，与上一轮结果对比 LCP，只有连续两次都稳定不变的前缀才会被逐段提交上屏。既保证了快速反馈，又绝不会把流式模型的草稿错误锁死。
 
+###   三区悬浮草稿窗
+
+自绘的暗色圆角悬浮窗跟随光标，草稿按可信度分成三区，用半透明底色标出区界——字色统一，整句话读起来仍是完整的一句话：
+
+- **绿区**：已稳定、即将上屏的文字
+- **黄区**：离线修正模型射程内、还可能微调的文字
+- **红区**：流式模型的最新草稿，随时会被重写
+
+窗口用 Cairo + Pango 自绘（X11），鼠标点击直接穿透到下层应用、不抢焦点；折行由引擎按显示列宽自算，行宽、行数、字号均可在 GUI 中配置。非 X11 会话或编译时缺 cairo/pango 会自动回退到 fcitx5 候选栏渲染。
+
 ###   LLM 智能润色
 
 可选的 LLM 后端（支持任何 OpenAI 兼容 API，如 vLLM / Ollama / 通义千问等），在语音识别完成后自动优化文本：
@@ -90,7 +100,7 @@
     ├─→ 麦克风采集音频 (16kHz)
     │       │
     │       ├─→ 流式模型 (paraformer-zh-streaming)
-    │       │       每 ~300ms 更新 preedit 预览文字（灰色下划线）
+    │       │       每 ~300ms 更新悬浮窗草稿（红区）
     │       │
     │       └─→ 离线修正模型 (SenseVoiceSmall)
     │               每新增 25 字或 2.5 秒触发一次
@@ -98,7 +108,7 @@
     │               ├─→ LCP 稳定性判定
     │               │      连续两次 LCP 超过已提交边界 → commit 到应用
     │               │
-    │               └─→ 候选框 (未稳定的尾巴)
+    │               └─→ 悬浮窗黄区（未稳定的尾巴）
     │
     ▼  松开触发键
 SenseVoiceSmall 最终识别 → 提交剩余全部文字
@@ -143,6 +153,7 @@ LLM 润色 → 修正外来词、优化标点
 sudo apt install fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk4 \
     fcitx5-frontend-qt5 fcitx5-config-qt cmake extra-cmake-modules \
     pkg-config libfcitx5core-dev libfcitx5config-dev gettext \
+    libcairo2-dev libpango1.0-dev libxext-dev \
     python3-pip python3-venv portaudio19-dev
 ```
 
@@ -237,7 +248,10 @@ YuHuang/
 │   ├── engine/                     # fcitx5 C++ 插件
 │   │   ├── CMakeLists.txt
 │   │   ├── yuhuang_engine.h/cpp    # 引擎主类（含 PTT 按键逻辑）
-│   │   ├── yuhuang_state.h         # InputContext 状态（preedit/commit）
+│   │   ├── yuhuang_state.h         # InputContext 状态（草稿更新/commit）
+│   │   ├── yuhuang_window.h/cpp    # 自绘悬浮草稿窗（X11 + Cairo + Pango）
+│   │   ├── yuhuang_panel.h         # 三区折行 + 候选栏回退渲染
+│   │   ├── x11_keycheck.h/cpp      # PTT 物理键盘看门狗（XI2 raw 事件）
 │   │   ├── yuhuang_socket.h        # Unix Socket 客户端（IPC 通信）
 │   │   ├── yuhuang-addon.conf.in   # fcitx5 插件注册
 │   │   ├── yuhuang-inputmethod.conf # 输入法注册
@@ -301,6 +315,7 @@ yuhuang-ctl mic "关键词" # 模糊匹配并设置设备
 ##  技术栈
 
 - **输入法框架**: fcitx5 (C++ 插件)
+- **草稿窗渲染**: X11 + Cairo + Pango（自绘悬浮窗，候选栏回退）
 - **IPC 通信**: Unix Domain Socket
 - **语音识别**: FunASR (paraformer-zh-streaming + SenseVoiceSmall)
 - **VAD**: FSMN-VAD

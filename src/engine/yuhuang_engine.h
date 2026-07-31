@@ -88,6 +88,12 @@ FCITX_CONFIGURATION(YuHuangConfig,
         6, fcitx::IntConstrain(1, 30)
     };
 
+    fcitx::Option<int, fcitx::IntConstrain> panelFontSize{
+        this, "PanelFontSize",
+        "Floating panel font size in points (self-drawn panel only)",
+        14, fcitx::IntConstrain(8, 40)
+    };
+
     // ---- LLM 优化 ----
     fcitx::Option<bool> llmEnabled{
         this, "LLMEnabled",
@@ -174,6 +180,8 @@ struct TextSegment {
     std::string style;  // "green" | "yellow" | "red" | "gray"
 };
 
+class PanelWindow;
+
 // ===== 每个 InputContext 的状态 =====
 class YuHuangState : public fcitx::InputContextProperty {
 public:
@@ -240,6 +248,14 @@ public:
     }
     int panelLineWidth() const { return config_.panelLineWidth.value(); }
     int panelMaxLines() const { return config_.panelMaxLines.value(); }
+    int panelFontSize() const { return config_.panelFontSize.value(); }
+
+    // 自绘悬浮窗：懒创建，首次调用时连 X 并注册事件监听。
+    // 返回 nullptr 表示不可用（非 X11 会话/未编进 cairo），
+    // 调用方应回退到候选栏渲染。
+    PanelWindow *panel();
+    // 只取已创建的窗口（hide 用，不触发创建）
+    PanelWindow *panelIfCreated();
 
     BackendClient &backend() { return *backend_; }
     YuHuangState *currentState();
@@ -275,6 +291,13 @@ private:
 
     // 后端客户端
     std::unique_ptr<BackendClient> backend_;
+
+#ifdef YUHUANG_HAVE_PANEL
+    // 自绘悬浮窗（panelIO_ 声明在后，析构时先摘事件源再关窗口）
+    std::unique_ptr<PanelWindow> panelWindow_;
+    std::unique_ptr<fcitx::EventSourceIO> panelIO_;
+    bool panelTried_ = false;
+#endif
 
     // 跨线程事件调度 (receiveLoop → fcitx5 主线程)
     fcitx::EventDispatcher eventDispatcher_;
