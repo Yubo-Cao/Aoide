@@ -424,9 +424,13 @@ void YuHuangEngine::keyEvent(const fcitx::InputMethodEntry &entry,
     // Return: commit current preedit
     if (key.sym() == vk::Return) {
         auto *state = ic->propertyFor(&factory_);
-        auto &inputPanel = ic->inputPanel();
-        std::string text = inputPanel.clientPreedit().toString();
-        if (text.empty()) text = inputPanel.preedit().toString();
+        // 三区文本画在 fcitx 面板上，应用内嵌 preedit 是空的，草稿全文取自 state
+        std::string text = state->pendingText();
+        if (text.empty()) {
+            auto &inputPanel = ic->inputPanel();
+            text = inputPanel.clientPreedit().toString();
+            if (text.empty()) text = inputPanel.preedit().toString();
+        }
         if (!text.empty()) {
             state->commitText(text);
             if (backend_ && backend_->isConnected()) {

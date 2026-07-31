@@ -74,6 +74,20 @@ FCITX_CONFIGURATION(YuHuangConfig,
         300, fcitx::IntConstrain(50, 2000)
     };
 
+    // ---- 悬浮面板显示 ----
+    // 三区文本统一由 fcitx 面板渲染，折行由引擎自己算（面板不会自动折行）
+    fcitx::Option<int, fcitx::IntConstrain> panelLineWidth{
+        this, "PanelLineWidth",
+        "Floating panel line width in display columns (a CJK char takes 2)",
+        48, fcitx::IntConstrain(10, 200)
+    };
+
+    fcitx::Option<int, fcitx::IntConstrain> panelMaxLines{
+        this, "PanelMaxLines",
+        "Max lines kept in floating panel (oldest lines are dropped)",
+        6, fcitx::IntConstrain(1, 30)
+    };
+
     // ---- LLM 优化 ----
     fcitx::Option<bool> llmEnabled{
         this, "LLMEnabled",
@@ -173,9 +187,14 @@ public:
 
     fcitx::InputContext *inputContext() const { return ic_; }
 
+    // 面板里正在显示的草稿全文。三区文本现在画在 fcitx 面板上，应用内嵌
+    // preedit 一律留空，Enter 键要上屏的内容只能从这里取。
+    const std::string &pendingText() const { return pendingText_; }
+
 private:
     YuHuangEngine *engine_;
     fcitx::InputContext *ic_;
+    std::string pendingText_;
 };
 
 // ===== 输入法引擎主类 =====
@@ -219,6 +238,8 @@ public:
     int asrIntermediateInterval() const {
         return config_.asrIntermediateInterval.value();
     }
+    int panelLineWidth() const { return config_.panelLineWidth.value(); }
+    int panelMaxLines() const { return config_.panelMaxLines.value(); }
 
     BackendClient &backend() { return *backend_; }
     YuHuangState *currentState();

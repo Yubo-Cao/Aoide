@@ -2,6 +2,7 @@
 #define YUHUANG_STATE_H
 
 #include "yuhuang_engine.h"
+#include "yuhuang_panel.h"
 #include <fcitx/inputpanel.h>
 #include <fcitx/text.h>
 #include <fcitx-utils/color.h>
@@ -15,39 +16,20 @@ inline YuHuangState::YuHuangState(YuHuangEngine *engine,
 inline YuHuangState::~YuHuangState() {}
 
 inline void YuHuangState::updatePreedit(const std::string &text) {
-    if (!ic_) return;
-
-    auto &inputPanel = ic_->inputPanel();
-
     if (text.empty()) {
-        inputPanel.setClientPreedit(fcitx::Text());
-        inputPanel.setPreedit(fcitx::Text());
-        ic_->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
-        ic_->updatePreedit();
+        reset();
         return;
     }
-
-    fcitx::Text preedit(text);
-    // ★ 光标定位到最新输入的位置（文本末尾）
-    preedit.setCursor(static_cast<int>(text.size()));
-
-    // ★ 应用内嵌 preedit（光标处直接显示，类似手机输入法）
-    inputPanel.setClientPreedit(preedit);
-    // ★ 清空 panel preedit（不需要候选框弹窗）
-    inputPanel.setPreedit(fcitx::Text());
-
-    ic_->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
-    ic_->updatePreedit();
+    // 单色文本（如 [Listening...] 提示）当作一个无样式分段走同一条路
+    updatePreedit(std::vector<TextSegment>{{text, ""}});
 }
 
 inline void YuHuangState::commitText(const std::string &text) {
     if (!ic_ || text.empty()) return;
 
-    auto &inputPanel = ic_->inputPanel();
-
-    // ★ 先清空 client preedit，防止残留文本被自动 flush 上屏
-    inputPanel.setClientPreedit(fcitx::Text());
-    inputPanel.setPreedit(fcitx::Text());
+    // ★ 先清空面板和 client preedit，防止残留文本被自动 flush 上屏
+    pendingText_.clear();
+    ic_->inputPanel().reset();
     ic_->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
     ic_->updatePreedit();
 
@@ -56,14 +38,14 @@ inline void YuHuangState::commitText(const std::string &text) {
 
 inline void YuHuangState::reset() {
     if (!ic_) return;
-    auto &inputPanel = ic_->inputPanel();
-    inputPanel.setClientPreedit(fcitx::Text());
-    inputPanel.setPreedit(fcitx::Text());
+    pendingText_.clear();
+    // preedit、aux、候选列表一并清掉，面板随之消失
+    ic_->inputPanel().reset();
     ic_->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
     ic_->updatePreedit();
 }
 
-// ---- 分段预编辑（应用内嵌 + 格式标记 + 光标跟踪）----
+// ---- 分段草稿（fcitx 悬浮面板 + 格式标记 + 自动折行）----
 
 inline void YuHuangState::updatePreedit(const std::vector<TextSegment> &segments) {
     if (!ic_) return;
@@ -73,33 +55,22 @@ inline void YuHuangState::updatePreedit(const std::vector<TextSegment> &segments
         return;
     }
 
+    pendingText_.clear();
+    for (const auto &seg : segments) pendingText_ += seg.text;
+
+    // ★ 三区文本拼成一块带格式的多行文本（下划线=红区，加粗=黄区，
+    // 高亮=绿区），折行位置自己算，面板只负责画
+    fcitx::Text block = buildWrappedText(segments, engine_->panelLineWidth(),
+                                         engine_->panelMaxLines());
+
     auto &inputPanel = ic_->inputPanel();
-
-    // ★ 构建带格式标记的 preedit（下划线=红区，加粗=黄区，高亮=绿区）
-    // gedit 等应用即使不支持颜色显示，也能渲染下划线和加粗
-    fcitx::Text preedit;
-    int cursorPos = 0;
-    for (const auto &seg : segments) {
-        fcitx::TextFormatFlags flags = fcitx::TextFormatFlag::NoFlag;
-        if (seg.style == "red") {
-            flags |= fcitx::TextFormatFlag::Underline;
-        } else if (seg.style == "yellow") {
-            flags |= fcitx::TextFormatFlag::Bold;
-        } else if (seg.style == "green") {
-            flags |= fcitx::TextFormatFlag::HighLight;
-        }
-        preedit.append(seg.text, flags);
-        cursorPos += static_cast<int>(seg.text.size());
-    }
-
-    // ★ 光标定位到最新输入的位置（preedit 末尾）
-    // 这样用户每次说话时，光标始终在最新字符后面，而非停留在 commit 位置
-    preedit.setCursor(cursorPos);
-
-    // ★ 应用内嵌 preedit（光标处直接显示，类似手机输入法）
-    inputPanel.setClientPreedit(preedit);
-    // ★ 清空 panel preedit（不需要候选框弹窗）
+    // ★ 应用内嵌 preedit 一律留空：各应用对格式的支持参差不齐，VSCode
+    // 只画下划线、WezTerm 压根不画，统一交给 fcitx 面板保证四处一致
+    inputPanel.setClientPreedit(fcitx::Text());
+    // ★ 面板的 preedit 那一栏被写死了单行（无法折行），所以改走候选栏
     inputPanel.setPreedit(fcitx::Text());
+    inputPanel.setCandidateList(
+        std::make_unique<PanelTextList>(std::move(block)));
 
     ic_->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
     ic_->updatePreedit();
