@@ -61,10 +61,9 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/yuhuang-addon.conf"
         RENAME yuhuang.conf
         DESTINATION "${FCITX_INSTALL_PKGDATADIR}/addon")
 
-# 安装输入法注册文件 (文件名必须与 addon 名称一致)
-install(FILES yuhuang-inputmethod.conf
-        RENAME yuhuang.conf
-        DESTINATION "${FCITX_INSTALL_PKGDATADIR}/inputmethod")
+# ★ 纯 addon（Category=Module）不再需要 inputmethod 注册文件。
+# 旧版若已安装过 inputmethod/yuhuang.conf，需手动删除以免 YuHuang
+# 仍出现在输入法列表里：sudo rm /usr/share/fcitx5/inputmethod/yuhuang.conf
 
 # 安装配置文件 (带 GUI 描述，供 fcitx5-configtool 使用)
 install(FILES yuhuang.conf

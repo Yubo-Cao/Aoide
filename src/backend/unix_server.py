@@ -22,6 +22,7 @@ class UnixSocketServer:
         self.on_audio_data: Optional[Callable] = None
         self.on_start_listening: Optional[Callable] = None
         self.on_stop_listening: Optional[Callable] = None
+        self.on_interrupt: Optional[Callable] = None  # ★ 打断收尾回调
         self.on_toggle: Optional[Callable] = None
         self.on_config: Optional[Callable] = None
         self.on_reset: Optional[Callable] = None
@@ -110,6 +111,11 @@ class UnixSocketServer:
                 logger.debug("Command: stop_listening")
                 if self.on_stop_listening:
                     await self.on_stop_listening()
+
+            elif msg_type == "interrupt":
+                logger.debug("Command: interrupt")
+                if self.on_interrupt:
+                    await self.on_interrupt()
 
             elif msg_type == "toggle":
                 logger.debug("Command: toggle")

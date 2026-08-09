@@ -7,6 +7,7 @@
 #endif
 #include <fcitx/inputpanel.h>
 #include <fcitx/event.h>
+#include <fcitx-utils/capabilityflags.h>
 #include <fcitx-config/iniparser.h>
 #include <iostream>
 #include <fstream>
@@ -55,9 +56,12 @@ static const std::unordered_set<std::string> kKnownConflicts = {
 // ---- Apply config to engine state ----
 void YuHuangEngine::applyConfig() {
     triggerKey_ = config_.triggerKey.value();
+    triggerMode_ = config_.triggerMode.value();
 
     std::cout << "[YuHuang] Config loaded: trigger="
               << triggerKey_.toString()
+              << ", mode="
+              << (triggerMode_ == PttMode::Toggle ? "toggle" : "hold")
               << ", backend=" << config_.backendSocket.value()
               << ", vad_timeout=" << config_.vadSilenceTimeoutMs.value() << "ms"
               << ", asr_interval=" << config_.asrIntermediateInterval.value()
@@ -133,6 +137,23 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
     // 将跨线程调度器挂载到 fcitx5 事件循环
     eventDispatcher_.attach(&instance_->eventLoop());
 
+    // ★ 注册全局按键监听（PreInputMethod 阶段，在拼音等输入法之前拿到按键）
+    // PTT 专用键 → 开始/结束录音；其他键+录音中 → 打断暂扣；否则放行给拼音
+    keyWatcher_ = instance_->watchEvent(
+        fcitx::EventType::InputContextKeyEvent,
+        fcitx::EventWatcherPhase::PreInputMethod,
+        [this](fcitx::Event &event) {
+            onGlobalKey(static_cast<fcitx::KeyEvent &>(event));
+        });
+
+    // ★ 注册焦点变化监听（焦点切走时若正在录音 → 打断收尾）
+    focusWatcher_ = instance_->watchEvent(
+        fcitx::EventType::InputContextFocusOut,
+        fcitx::EventWatcherPhase::PreInputMethod,
+        [this](fcitx::Event &event) {
+            onFocusOut(static_cast<fcitx::InputContextEvent &>(event));
+        });
+
     // 注册回调（无论当前是否已连接，保证后续重连时回调依然有效）
     backend_->setResultCallback([this](const std::string &type,
                                         const std::string &text,
@@ -144,6 +165,12 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
         eventDispatcher_.schedule([this, type, text, raw_msg]() {
             std::cout << "[YuHuang] CB exec on main: type=" << type
                       << " text=" << text.substr(0, 40) << std::endl;
+
+            // ★ interrupt_done 不依赖 state：放行被暂扣的打断按键是引擎级操作
+            if (type == "interrupt_done") {
+                releasePendingKey();
+                return;
+            }
 
             YuHuangState *state = currentState();
             if (!state) {
@@ -217,9 +244,30 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
             } else if (type == "optimized") {
                 state->updatePreedit(text);
             } else if (type == "commit") {
-                state->commitText(text);
+                state->commitSmart(text);
+            } else if (type == "interrupt_commit") {
+                // ★ 打断收尾：假上屏通道拼接 fakeCommitted + 剩余真上屏；
+                //   真上屏通道直接上屏剩余。不做删除重推（光标即将移走）。
+                state->interruptCommit(text);
+            } else if (type == "replace") {
+                // ★ 全文终审上屏：前端按应用能力自选真/假上屏通道
+                std::string delStr = extractField(raw_msg, "delete_chars");
+                std::string fallback = extractField(raw_msg, "fallback_text");
+                int delChars = 0;
+                if (!delStr.empty()) {
+                    try {
+                        delChars = std::stoi(delStr);
+                    } catch (...) {
+                        delChars = 0;
+                    }
+                }
+                state->replaceSmart(delChars, text, fallback);
+                std::cout << "[YuHuang] replace: delete=" << delChars
+                          << " text=" << text.size() << "B"
+                          << " preedit_channel=" << state->usePreeditChannel()
+                          << std::endl;
             } else if (type == "reset") {
-                state->reset();
+                state->resetSmart();
             } else if (type == "error") {
                 state->updatePreedit("[! " + text + "]");
             }
@@ -230,8 +278,9 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
         backend_->startReceiveLoop();
         std::cout << "[YuHuang] Backend connected, sending config..." << std::endl;
         sendConfigToBackend();
-        std::cout << "[YuHuang] Ready for push-to-talk (hold "
-                  << triggerKey_.toString() << " to speak)" << std::endl;
+        std::cout << "[YuHuang] Ready for push-to-talk ("
+                  << (triggerMode_ == PttMode::Toggle ? "toggle" : "hold")
+                  << " " << triggerKey_.toString() << " to speak)" << std::endl;
     } else {
         std::cerr << "[YuHuang] Warning: Backend not available at "
                   << config_.backendSocket.value() << std::endl;
@@ -246,61 +295,190 @@ YuHuangEngine::~YuHuangEngine() {
     }
 }
 
-// ---- Activate / Deactivate ----
-void YuHuangEngine::activate(const fcitx::InputMethodEntry &entry,
-                               fcitx::InputContextEvent &event) {
-    FCITX_UNUSED(entry);
-    auto *ic = event.inputContext();
-    std::cout << "[YuHuang] Activated on: "
-              << (ic ? ic->program() : "?") << std::endl;
+// ---- ★ 全局事件处理（addon 模式，PreInputMethod 阶段）----
 
+void YuHuangEngine::onGlobalKey(fcitx::KeyEvent &keyEvent) {
+    const fcitx::Key &key = keyEvent.key();
+    bool isRelease = keyEvent.isRelease();
+
+    // ★ 自动重连：backend 断连后在任意按键时尝试重连
     if (backend_ && !backend_->isConnected()) {
-        // 完全断开旧连接（关闭 fd、设 connected_=false），
-        // 否则 connect() 会因为 connected_=true 直接返回，复用已 shutdown 的旧 fd
         backend_->disconnect();
         if (backend_->connect()) {
             backend_->startReceiveLoop();
             sendConfigToBackend();
-            std::cout << "[YuHuang] Backend reconnected on activate" << std::endl;
         }
     }
 
-    // Clear any leftover preedit on activation
-    if (ic) {
-        auto *state = ic->propertyFor(&factory_);
-        if (state) {
-            state->reset();
+    // ★ 组合键匹配：sym 相同 + 修饰键 states 包含 triggerKey 的修饰键。
+    // 只比 sym 会误吞普通键（实录：TriggerKey=Ctrl+Alt+Shift+Y 后
+    // Shift+Y 输入大写失效，因为 Y 的 sym 被当成 PTT 吞掉）。
+    auto isTrigger = [&](const fcitx::Key &k) -> bool {
+        if (k.sym() != triggerKey_.sym()) return false;
+        auto required = triggerKey_.states();
+        auto actual = k.states();
+        return (actual & required) == required;
+    };
+
+    if (isTrigger(key)) {
+        keyEvent.filterAndAccept();
+        if (triggerMode_ == PttMode::Toggle) {
+            // ★ Toggle 模式：按一下开始、再按一下结束，release 一律忽略。
+            // 适用 Free3 等脉冲式蓝牙小键盘（press 后 ~62ms 伪造 release，
+            // 物理上无法表达"按住"，所以松键信号无意义）。
+            if (isRelease) return;
+            // ★ 去抖：物理键盘按住会自动重复 press（~30ms 一次），
+            // Free3 的脉冲也会紧跟前一次 press。<600ms 内的重复 press
+            // 忽略——正常 toggle 停止至少要说话几百毫秒后才再按。
+            uint64_t t = static_cast<uint64_t>(keyEvent.time());
+            if (t > lastToggleTime_ && t - lastToggleTime_ < 600) {
+                logPtt("PTT: toggle press ignored (debounce)");
+                return;
+            }
+            lastToggleTime_ = t;
+            if (isRecording_) {
+                logPtt("PTT: toggle press while recording -> stop");
+                stopListening();
+            } else {
+                startListening();
+                recordingStartTime_ = t;  // ★ 打断去抖基准
+            }
+        } else {
+            // ★ Hold 模式：按住说话、松开全文终审。组合键按住期间主键
+            // 可能自动重复 press，用 isRecording_ 防重复开始。
+            // 脉冲式设备（Free3）在此模式下按下即立刻松手会触发开始又
+            // 立刻停止——脉冲设备请选 Toggle 模式。
+            if (isRelease) {
+                if (isRecording_) {
+                    stopListening();
+                }
+            } else {
+                if (isRecording_) {
+                    return;  // 按住期间的自动重复 press，忽略
+                }
+                startListening();
+                recordingStartTime_ = keyEvent.time();  // ★ 打断去抖基准
+            }
         }
+        return;
+    }
+
+    // 非 PTT 按键 + 录音中 + 按下 → 打断：暂扣按键 + 润色剩余收尾
+    if (isRecording_ && !isRelease) {
+        // ★ 去抖：PTT 按下后 200ms 内的按键多为 Pause 伴随噪声（Pause/Break
+        // 物理键按下时会伴随产生假的 Shift/Control/Meta 修饰键事件），忽略。
+        // 正常说话至少几百毫秒，这期间用户不可能已经完成说话又要打字。
+        uint64_t t = static_cast<uint64_t>(keyEvent.time());
+        if (t > recordingStartTime_ && t - recordingStartTime_ < 200) {
+            logPtt(std::string("PTT: ignore key in debounce window ")
+                   + key.toString());
+            return;
+        }
+        if (key.isModifier()) {
+            // ★ 纯修饰键分两小类（去抖窗口外的）：
+            // 1) 属于触发组合键修饰集（如 TriggerKey=Ctrl+Alt+Shift+Y 时按下
+            //    Ctrl/Alt/Shift）：大概率是用户正在按组合键去停止 PTT（toggle）
+            //    或开始 PTT（hold）→ 忽略，不打断，等后面的主键匹配。
+            // 2) 集合之外的修饰键（如 bare Super/Ctrl，当触发键是 Pause 时）
+            //    → 用户有意按键，照常打断。
+            auto modStates = key.states()
+                             | fcitx::Key::keySymToStates(key.sym());
+            if (!(modStates & ~triggerKey_.states())) {
+                logPtt(std::string("PTT: ignore modifier (trigger combo component) ")
+                       + key.toString());
+                return;
+            }
+            // 集合外修饰键：落入下面的打断流程
+        }
+        keyEvent.filterAndAccept();  // 暂扣，拼音收不到
+        pendingKey_ = key;
+        pendingKeyRelease_ = false;
+        pendingKeyTime_ = keyEvent.time();
+        hasPendingKey_ = true;
+        logPtt(std::string("PTT: interrupted by key ") + key.toString() +
+               " -> hold key, finalize remaining");
+        interruptListening();
+        return;
+    }
+    // 其余情况（非录音 / 纯 release）→ 放行给拼音，不处理
+}
+
+void YuHuangEngine::onFocusOut(fcitx::InputContextEvent &event) {
+    FCITX_UNUSED(event);
+    if (isRecording_) {
+        logPtt("PTT: focus lost while recording -> interrupt");
+        interruptListening();  // 焦点打断：无暂扣按键，只润色剩余收尾
     }
 }
 
-void YuHuangEngine::deactivate(const fcitx::InputMethodEntry &entry,
-                                 fcitx::InputContextEvent &event) {
-    FCITX_UNUSED(entry);
-    auto *ic = event.inputContext();
-    std::cout << "[YuHuang] Deactivated on: "
-              << (ic ? ic->program() : "?") << std::endl;
+// ---- ★ PTT 生命周期 ----
 
-    // ★ 统一走 stopListeningInternal（顺带修复旧版不清
-    // triggerPressed_ 的潜伏 bug：焦点切走后引擎仍认为触发键按着）
-    stopListeningInternal("focus-out");
+void YuHuangEngine::startListening() {
+    auto *ic = instance_->mostRecentInputContext();
+    if (!ic) {
+        logPtt("PTT: no focused input context, ignore trigger");
+        return;
+    }
+    // ★ 钉住本次录音的目标 IC：之后后端的所有 preedit/commit/replace
+    // 都打到这个窗口，即使录音中用户用鼠标把焦点点走
+    recordingIc_ = ic->watch();
+    isRecording_ = true;
+    logPtt(std::string("PTT: trigger pressed -> start listening on ")
+           + ic->program());
+    if (backend_ && backend_->isConnected()) {
+        backend_->sendCommand("{\"type\":\"start_listening\"}");
+    }
+    // ★ 组合键模式不启动物理看门狗：XQueryKeymap 对组合键的单个键位
+    // （主键 Y）查询不可靠，且 PTT 是按住说话，release 事件直接可信。
+    // 若实测 release 丢失（录音卡住），再考虑恢复看门狗。
 }
 
-// ---- ★ PTT 停止统一入口与物理键盘看门狗 ----
-
-void YuHuangEngine::stopListeningInternal(const char *reason) {
-    // 注意：不在这里销毁 pttWatchdog_——本函数可能在看门狗自身回调内
-    // 被调用，回调内销毁自身事件源是 UB。回调见 !triggerPressed_
-    // 后不续期自然停摆，下次 startPttWatchdog 会 reset 重建。
-    triggerPressed_ = false;
+void YuHuangEngine::stopListening() {
+    // PTT 松开：全文终审（删除重推改开头错字，光标还在语音末尾）
+    if (!isRecording_) return;
+    isRecording_ = false;
     watchdogMisses_ = 0;
     x11WatchKeyEnd();  // 退订 raw 事件，防止在连接上无限堆积
-    if (!listening_) return;
-    listening_ = false;
-    logPtt(std::string("PTT: stop listening (") + reason + ")");
+    logPtt("PTT: stop listening (release)");
     if (backend_ && backend_->isConnected()) {
         backend_->sendCommand("{\"type\":\"stop_listening\"}");
     }
+}
+
+void YuHuangEngine::interruptListening() {
+    // 打断：只润色剩余收尾，不删除重推（光标即将移走，会误删用户输入）
+    if (!isRecording_) return;
+    isRecording_ = false;
+    watchdogMisses_ = 0;
+    x11WatchKeyEnd();
+    logPtt("PTT: interrupt -> finalize remaining");
+    if (backend_ && backend_->isConnected()) {
+        backend_->sendCommand("{\"type\":\"interrupt\"}");
+    }
+    // isRecording_=false 后，该键的 release 及后续按键穿透给拼音；
+    // 暂扣的 press 等后端 interrupt_done 后由 releasePendingKey 放行
+}
+
+void YuHuangEngine::releasePendingKey() {
+    if (!hasPendingKey_) return;
+    hasPendingKey_ = false;
+    // ★ 防护：打断收尾期间用户若又重新按下 PTT（isRecording_=true），
+    // 旧打断按键已过时，丢弃不重注入——避免重注入的按键再次触发打断
+    if (isRecording_) {
+        logPtt("PTT: discard held key (new recording already started)");
+        return;
+    }
+    auto *ic = recordingIc_.get();
+    if (!ic) {
+        ic = instance_->mostRecentInputContext();
+    }
+    if (!ic) return;
+    // ★ postEvent 重新注入暂扣的按键 press，交回拼音处理。
+    // 重注入会再过 PreInputMethod，但 isRecording_=false 不会被二次拦截，
+    // 按键顺利到达 InputMethod 阶段的拼音。
+    fcitx::KeyEvent keyEvent(ic, pendingKey_, pendingKeyRelease_, pendingKeyTime_);
+    instance_->postEvent(keyEvent);
+    logPtt(std::string("PTT: released held key ") + pendingKey_.toString());
 }
 
 void YuHuangEngine::startPttWatchdog() {
@@ -316,7 +494,7 @@ void YuHuangEngine::startPttWatchdog() {
     pttWatchdog_ = instance_->eventLoop().addTimeEvent(
         CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + 200000, 10000,
         [this](fcitx::EventSourceTime *source, uint64_t) {
-            if (!triggerPressed_) {
+            if (!isRecording_) {
                 return true;  // 已正常停止：不续期，自然停摆
             }
             int down = x11WatchKeyPoll();
@@ -326,7 +504,7 @@ void YuHuangEngine::startPttWatchdog() {
                     logPtt("PTT watchdog: physical key released "
                            "but no release event received "
                            "(grabbed by compositor?) -> force stop");
-                    stopListeningInternal("watchdog");
+                    stopListening();
                     return true;  // 已停止，不续期
                 }
             } else {
@@ -344,145 +522,17 @@ void YuHuangEngine::stopPttWatchdog() {
     watchdogMisses_ = 0;
 }
 
-// ---- Key Event (PTT Core) ----
-void YuHuangEngine::keyEvent(const fcitx::InputMethodEntry &entry,
-                               fcitx::KeyEvent &keyEvent) {
-    FCITX_UNUSED(entry);
-
-    auto *ic = keyEvent.inputContext();
-    if (!ic) return;
-
-    const fcitx::Key &key = keyEvent.key();
-    bool isRelease = keyEvent.isRelease();
-
-    // ★ 自动重连：backend 断连后在任意按键时尝试重连
-    if (backend_ && !backend_->isConnected()) {
-        backend_->disconnect();  // 清理旧 fd
-        if (backend_->connect()) {
-            backend_->startReceiveLoop();
-            sendConfigToBackend();
-            std::cout << "[YuHuang] Backend auto-reconnected on key event" << std::endl;
-        }
-    }
-
-    // Log every key event for debugging (remove in production?)
-    std::cout << "[YuHuang] keyEvent: sym=0x" << std::hex << key.sym()
-              << std::dec << " key=" << key.toString()
-              << " release=" << isRelease
-              << " mods=0x" << std::hex << key.states()
-              << std::dec << std::endl;
-
-    // PTT trigger key handling
-    // Use sym comparison + fuzzy states match (release events add own modifier)
-    if (key.sym() == triggerKey_.sym()) {
-        if (isRelease) {
-            if (triggerPressed_) {
-                logPtt("PTT: trigger released");
-                stopListeningInternal("release");
-                keyEvent.filterAndAccept();
-            }
-        } else {
-            // ★ 重复按下救援：修饰键无自动重复，triggerPressed_
-            // 已真时再收到按下 = 松键事件被合成器吞了，用户在补按
-            // 救援 -> 当停止处理。限定 isModifier()：非修饰触发键有
-            // 自动重复，会误杀正常长按。
-            if (triggerPressed_ && key.isModifier()) {
-                logPtt("PTT: duplicate press while held "
-                       "(release event was lost) -> rescue stop");
-                stopListeningInternal("rescue-press");
-                keyEvent.filterAndAccept();
-                return;
-            }
-            triggerPressed_ = true;
-            listening_ = true;
-            logPtt("PTT: trigger pressed -> start listening");
-            if (backend_ && backend_->isConnected()) {
-                backend_->sendCommand("{\"type\":\"start_listening\"}");
-            }
-            startPttWatchdog();  // ★ 监控物理键位，防松键事件丢失
-            keyEvent.filterAndAccept();
-        }
-        return;
-    }
-
-    // If trigger is pressed, pass other keys through
-    if (triggerPressed_) {
-        return;
-    }
-
-    // Ignore pure release events for non-trigger keys
-    if (isRelease) return;
-
-    // Esc: cancel preedit
-    if (key.sym() == vk::Escape) {
-        auto *state = ic->propertyFor(&factory_);
-        state->reset();
-        if (backend_ && backend_->isConnected()) {
-            backend_->sendCommand("{\"type\":\"reset\"}");
-        }
-        keyEvent.filterAndAccept();
-        return;
-    }
-
-    // Return: commit current preedit
-    if (key.sym() == vk::Return) {
-        auto *state = ic->propertyFor(&factory_);
-        // 三区文本画在 fcitx 面板上，应用内嵌 preedit 是空的，草稿全文取自 state
-        std::string text = state->pendingText();
-        if (text.empty()) {
-            auto &inputPanel = ic->inputPanel();
-            text = inputPanel.clientPreedit().toString();
-            if (text.empty()) text = inputPanel.preedit().toString();
-        }
-        if (!text.empty()) {
-            state->commitText(text);
-            if (backend_ && backend_->isConnected()) {
-                backend_->sendCommand("{\"type\":\"commit_now\"}");
-            }
-            keyEvent.filterAndAccept();
-        }
-        return;
-    }
-
-    // F5: force LLM optimization
-    if (key.sym() == vk::F5) {
-        if (backend_ && backend_->isConnected()) {
-            backend_->sendCommand("{\"type\":\"optimize_now\"}");
-        }
-        keyEvent.filterAndAccept();
-        return;
-    }
-
-    // F6: toggle listening mode (manual override)
-    if (key.sym() == vk::F6) {
-        listening_ = !listening_;
-        if (backend_ && backend_->isConnected()) {
-            backend_->sendCommand(listening_
-                ? "{\"type\":\"start_listening\"}"
-                : "{\"type\":\"stop_listening\"}");
-        }
-        auto *state = ic->propertyFor(&factory_);
-        state->updatePreedit(listening_ ? "[Listening...]" : "");
-        keyEvent.filterAndAccept();
-        return;
-    }
-
-    // Other keys: pass through
-}
-
-// ---- Reset ----
-void YuHuangEngine::reset(const fcitx::InputMethodEntry &entry,
-                           fcitx::InputContextEvent &event) {
-    FCITX_UNUSED(entry);
-    auto *state = event.inputContext()->propertyFor(&factory_);
-    state->reset();
-}
-
 // ---- Current focused state ----
 YuHuangState *YuHuangEngine::currentState() {
-    auto *focusedIC = instance_->lastFocusedInputContext();
-    if (!focusedIC) return nullptr;
-    return focusedIC->propertyFor(&factory_);
+    // ★ 优先使用 startListening 钉住的 IC，不跟随当前焦点——否则录音中
+    // 用户用鼠标点了别的窗口，后端收尾的 commit/replace 会落到新窗口。
+    // 钉住的 IC 已销毁（窗口关闭）或未录音过时，回退到当前焦点 IC。
+    auto *ic = recordingIc_.get();
+    if (!ic) {
+        ic = instance_->mostRecentInputContext();
+    }
+    if (!ic) return nullptr;
+    return ic->propertyFor(&factory_);
 }
 
 // ---- 自绘悬浮窗 ----

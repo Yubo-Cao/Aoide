@@ -1,11 +1,11 @@
 [Addon]
 Name=YuHuang
 Name[zh_CN]=语音输入法
-Category=InputMethod
+Category=Module
 Version=@PROJECT_VERSION@
 Library=yuhuang
 Type=SharedLibrary
-OnDemand=True
+OnDemand=False
 Configurable=True
 
 [Addon/Dependencies]

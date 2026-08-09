@@ -1,13 +1,16 @@
 #ifndef YUHUANG_ENGINE_H
 #define YUHUANG_ENGINE_H
 
-#include <fcitx/inputmethodengine.h>
+#include <fcitx/addoninstance.h>
 #include <fcitx/addonfactory.h>
 #include <fcitx/addonmanager.h>
 #include <fcitx/inputcontextproperty.h>
+#include <fcitx/inputcontext.h>
 #include <fcitx/instance.h>
+#include <fcitx/event.h>
 #include <fcitx-config/configuration.h>
 #include <fcitx-config/option.h>
+#include <fcitx-config/enum.h>
 #include <string>
 #include <vector>
 #include <memory>
@@ -28,18 +31,29 @@ namespace vk {
     constexpr uint32_t F6     = 0xFFC6;
 }
 
+// ===== PTT 触发模式 =====
+// Hold   = 按住说话、松手上屏（普通键盘按住式触发）
+// Toggle = 按一下开始、再按一下结束（Free3 等脉冲式蓝牙小键盘：
+//          按下即发 press+release 脉冲，物理上无法表达"按住"）
+FCITX_CONFIG_ENUM(PttMode, Hold, Toggle);
+
 // ===== 配置类 (fcitx5-configtool GUI 可编辑) =====
 // 注意: double/float 非 fcitx5 原生支持, 时间值用 int (毫秒) 存储
 FCITX_CONFIGURATION(YuHuangConfig,
 
     // ---- 触发键 (PTT) ----
     fcitx::Option<fcitx::Key, fcitx::KeyConstrain> triggerKey{
-        this, "TriggerKey", "Push-to-talk trigger key",
-        fcitx::Key("Control_R"),
+        this, "TriggerKey", "Trigger key",
+        fcitx::Key("Pause"),
         fcitx::KeyConstrain(
             fcitx::KeyConstrainFlags{}
             | fcitx::KeyConstrainFlag::AllowModifierOnly
             | fcitx::KeyConstrainFlag::AllowModifierLess)
+    };
+
+    // ---- 触发模式 (PTT) ----
+    fcitx::Option<PttMode> triggerMode{
+        this, "TriggerMode", "Trigger mode", PttMode::Hold
     };
 
     fcitx::Option<bool> checkConflicts{
@@ -193,6 +207,18 @@ public:
     void commitText(const std::string &text);
     void reset();
 
+    // ★ 三级通道路上屏（按应用能力区分真上屏 / 假上屏到候选区）
+    bool usePreeditChannel() const;        // Preedit=1：假上屏通道
+    bool supportFormattedPreedit() const;  // FormattedPreedit=1：preedit 可带格式
+    void commitSmart(const std::string &text);    // commit 分通道
+    void replaceSmart(int delChars, const std::string &text,
+                      const std::string &fallback);  // replace 分通道
+    void resetSmart();                     // reset + 清空假上屏
+
+    // ★ 打断收尾提交：假上屏通道把 fakeCommitted + 剩余拼接真上屏；
+    //   真上屏通道直接上屏剩余。不做删除重推（光标即将移走）。
+    void interruptCommit(const std::string &text);
+
     fcitx::InputContext *inputContext() const { return ic_; }
 
     // 面板里正在显示的草稿全文。三区文本现在画在 fcitx 面板上，应用内嵌
@@ -200,31 +226,25 @@ public:
     const std::string &pendingText() const { return pendingText_; }
 
 private:
+    void fakeCommit(const std::string &text);  // 假上屏累积到候选区
+    void updateFakePreedit();                   // 刷新假上屏 preedit 显示
+    void clearFakePreedit();                    // 清空假上屏
+
     YuHuangEngine *engine_;
     fcitx::InputContext *ic_;
     std::string pendingText_;
+    std::string fakeCommitted_;  // ★ 假上屏累积文本（Preedit 通道）
 };
 
-// ===== 输入法引擎主类 =====
-class YuHuangEngine : public fcitx::InputMethodEngineV2 {
+// ===== 语音输入主类（纯 addon 全局监听，不再继承 InputMethodEngine）=====
+// 拼音等其他输入法始终激活，本 addon 只在 PreInputMethod 阶段监听 PTT 专用
+// 键与打断信号，语音上屏到当前焦点应用的光标处，实现语音拼音共存。
+class YuHuangEngine : public fcitx::AddonInstance {
 public:
     explicit YuHuangEngine(fcitx::Instance *instance);
     ~YuHuangEngine();
 
-    // InputMethodEngine 接口
-    void keyEvent(const fcitx::InputMethodEntry &entry,
-                  fcitx::KeyEvent &keyEvent) override;
-
-    void activate(const fcitx::InputMethodEntry &entry,
-                  fcitx::InputContextEvent &event) override;
-
-    void deactivate(const fcitx::InputMethodEntry &entry,
-                    fcitx::InputContextEvent &event) override;
-
-    void reset(const fcitx::InputMethodEntry &entry,
-               fcitx::InputContextEvent &event) override;
-
-    // 配置 (GUI 集成)
+    // 配置 (GUI 集成) — AddonInstance 虚函数
     const fcitx::Configuration *getConfig() const override {
         return &config_;
     }
@@ -251,28 +271,33 @@ public:
     int panelFontSize() const { return config_.panelFontSize.value(); }
 
     // 自绘悬浮窗：懒创建，首次调用时连 X 并注册事件监听。
-    // 返回 nullptr 表示不可用（非 X11 会话/未编进 cairo），
-    // 调用方应回退到候选栏渲染。
     PanelWindow *panel();
-    // 只取已创建的窗口（hide 用，不触发创建）
     PanelWindow *panelIfCreated();
 
     BackendClient &backend() { return *backend_; }
     YuHuangState *currentState();
 
     // PTT 状态
-    bool isListening() const { return listening_; }
-    void setListening(bool v) { listening_ = v; }
+    bool isListening() const { return isRecording_; }
 
 private:
     void applyConfig();
     void checkSystemConflict(const fcitx::Key &key);
     void sendConfigToBackend();
 
+    // ★ 全局事件处理（addon 模式，PreInputMethod 阶段）
+    void onGlobalKey(fcitx::KeyEvent &key);
+    void onFocusOut(fcitx::InputContextEvent &event);
+
+    // ★ PTT 生命周期
+    void startListening();        // PTT 按下：开始录音
+    void stopListening();         // PTT 松开：全文终审（删除重推）
+    void interruptListening();    // 打断：暂扣按键 + 润色剩余收尾
+    void releasePendingKey();     // interrupt_done 后放行暂扣按键
+
     // ★ PTT 停止统一入口 + 物理键盘看门狗
     // 背景：GNOME 合成器键盘 grab 会吞掉松键事件（实录 5.5 分钟卡麦），
     // 引擎侧永远等不到 release，须主动向 X server 轮询物理键位状态。
-    void stopListeningInternal(const char *reason);
     void startPttWatchdog();
     void stopPttWatchdog();
 
@@ -280,10 +305,28 @@ private:
     fcitx::FactoryFor<YuHuangState> factory_;
     YuHuangConfig config_;
 
-    // PTT 触发键
+    // PTT 触发键与录音状态
     fcitx::Key triggerKey_;
-    bool listening_ = false;
-    bool triggerPressed_ = false;
+    PttMode triggerMode_ = PttMode::Hold;
+    bool isRecording_ = false;
+    uint64_t recordingStartTime_ = 0;  // ★ PTT 按下的事件时间（打断去抖基准，同 keyEvent.time() 的 int 语义，用无符号避免回绕）
+    uint64_t lastToggleTime_ = 0;  // ★ Toggle 模式去抖：上次 toggle 动作时间（防键盘自动重复 / Free3 脉冲连发误触发）
+
+    // ★ 本次录音钉住的输入上下文（startListening 时捕获）。
+    // 后续所有上屏/预编辑都打到这个 IC，而不是跟随当前焦点——否则录音中
+    // 用鼠标点了别的窗口，后端收尾的 commit/replace 会落到新窗口里。
+    // IC 销毁（窗口关闭）时引用自动失效，回退到 mostRecentInputContext。
+    fcitx::TrackableObjectReference<fcitx::InputContext> recordingIc_;
+
+    // ★ 打断暂扣的按键（等后端 interrupt_done 后放行给拼音）
+    fcitx::Key pendingKey_;
+    bool pendingKeyRelease_ = false;
+    int pendingKeyTime_ = 0;
+    bool hasPendingKey_ = false;
+
+    // ★ 全局事件监听句柄（PreInputMethod 阶段）
+    std::unique_ptr<fcitx::HandlerTableEntry<fcitx::EventHandler>> keyWatcher_;
+    std::unique_ptr<fcitx::HandlerTableEntry<fcitx::EventHandler>> focusWatcher_;
 
     // ★ 看门狗：200ms 轮询物理键位，连续 2 次未按下判定丢松键
     std::unique_ptr<fcitx::EventSourceTime> pttWatchdog_;

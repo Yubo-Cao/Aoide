@@ -725,7 +725,6 @@ class PTTPipeline:
     #   （实录："手冲"上屏 110s 后 ASR 吐"首充"，40 字窗口早已
     #   遗忘锚点，LLM 孤立看"首充"完全合法，无理由改写）
     BACKGROUND_CONTEXT_CHARS = 500  # 前文参考滑窗长度（≈最近 2 分钟定稿）
-    COMMITTED_TAIL_CAP = 800        # 会话内已定稿文本的记忆上限
 
     def __init__(self, server, llm_optimizer=None):
         self.server = server
@@ -737,8 +736,10 @@ class PTTPipeline:
         self.buffer._request_refine = self._schedule_refine
         self._emergency_timer: Optional[asyncio.Task] = None
         self._prev_offline_text = ""
-        # ★ 已上屏定稿文本尾部（跨段衔接的上文，_on_commit 累积）
-        self._committed_tail: str = ""
+        # ★ 本次会话已上屏的完整文本（含 pad 尾空格，与应用实际内容一致）
+        # 数据只存这一份全文：润色上下文（prev/bg）与 finalize 全文终审
+        # 均从它临时取段，不再单独维护 _committed_tail 滑动窗口副本
+        self._session_committed_text: str = ""
         # ★ 润色任务与 finalize 锁
         self._refine_task: Optional[asyncio.Task] = None
         self._finalizing: bool = False
@@ -753,7 +754,7 @@ class PTTPipeline:
         self.buffer.set_llm_enabled(saved_llm)
         self.buffer._request_refine = self._schedule_refine
         self._prev_offline_text = ""
-        self._committed_tail = ""
+        self._session_committed_text = ""
         # 取消在途润色（旧 buffer 已废弃）
         if self._refine_task and not self._refine_task.done():
             self._refine_task.cancel()
@@ -809,7 +810,8 @@ class PTTPipeline:
         if self._refine_task and not self._refine_task.done():
             return  # 已有润色在途，完成后会重新触发 _try_commit
         # ★ 跨段衔接上下文：上文=已定稿尾部，下文=本段之后的粗识别文本
-        prev_ctx = self._committed_tail[-self.PREV_CONTEXT_CHARS:]
+        # 数据只有 _session_committed_text 一份全文，prev/bg 均从它临时取段
+        prev_ctx = self._session_committed_text[-self.PREV_CONTEXT_CHARS:]
         next_ctx = self.buffer.full_text[
             len(raw_text):len(raw_text) + self.NEXT_CONTEXT_CHARS]
         bg_ctx = self._background_context()
@@ -827,8 +829,9 @@ class PTTPipeline:
         """★ 前文参考：紧邻上文之前的已定稿文本滑窗。
 
         与紧邻上文物理隔开：拼接上文要暗示 LLM "输出接在这后面"，
-        参考上文恰恰要切断这种暗示（防抄写，血泪）。"""
-        return self._committed_tail[:-self.PREV_CONTEXT_CHARS][
+        参考上文恰恰要切断这种暗示（防抄写，血泪）。
+        数据源是 _session_committed_text 一份全文，临时取段。"""
+        return self._session_committed_text[:-self.PREV_CONTEXT_CHARS][
             -self.BACKGROUND_CONTEXT_CHARS:]
 
     @staticmethod
@@ -969,7 +972,12 @@ class PTTPipeline:
         # 头部已变化 → 丢弃本次结果，下一轮离线纠正会重新触发
 
     async def finalize(self):
-        """PTT 松键：所有剩余文本推绿，尝试 LLM 润色，提交。
+        """PTT 松键：剩余文本推绿 + 全文终审润色。
+
+        ★ 全文改写（方案 B）：本次会话【已上屏】内容 + buffer 剩余拼成
+        全文送 LLM，有改进时发 replace 消息——前端删除本次已上屏文本、
+        重推润色后全文，从而改写开头错字（滑动窗口够不着的部分）。
+        应用不支持 surroundingText 时前端自动降级为只上屏剩余、不动已上屏。
 
         ★ 全程持有 _finalizing 锁 —— LLM 等待期间离线纠正/应急定时器
         不得再改写或提交 buffer，否则终审快照会把已提交内容重复上屏。
@@ -989,26 +997,36 @@ class PTTPipeline:
             # ★ 立即渲染全绿 preedit：终审等待期间给用户"文本已定稿"反馈
             await self._update_display()
 
-            # 获取待提交文本
-            text_to_commit = self.buffer.full_text
+            remaining = self.buffer.full_text           # buffer 剩余（未上屏）
+            session_text = self._session_committed_text  # 本次已上屏（含 pad）
+            full_text = session_text + remaining         # 本次会话全文
 
-            if text_to_commit and self.llm_optimizer:
-                text_to_commit = await self._refine_final(text_to_commit)
+            if full_text.strip():
+                # ★ 全文终审润色（有 LLM 就润色，没有则原文）
+                refined_full = full_text.strip()
+                if self.llm_optimizer:
+                    refined_result = await self._refine_final(full_text)
+                    if refined_result and refined_result.strip():
+                        refined_full = refined_result.strip()
 
-            if text_to_commit:
-                stripped = text_to_commit.strip()
-                if stripped:
-                    if self.server:
-                        await self.server.broadcast(
-                            {"type": "final", "text": stripped}
-                        )
-                # ★ 用 stripped 文本替换 buffer 并提交，避免 strip 前后长度不一致导致丢字
-                self.buffer._chars.clear()
-                for ch in stripped:
-                    self.buffer._chars.append(ch)
-                self.buffer._green_end = len(stripped)
-                self.buffer._yellow_end = self.buffer._green_end
-                self.buffer._do_commit(stripped)
+                # ★ 有改进才需要删除重推（真上屏通道）；无改进 delete_chars=0
+                changed = (refined_full != full_text.strip())
+
+                # ★ 统一发 replace，前端按应用能力自选通道：
+                #   - 假上屏通道(Preedit=1)：commit text（全文，替换假上屏）
+                #   - 真上屏通道+支持删除+有改进：deleteSurrounding + commit text
+                #   - 真上屏通道其他情况：commit fallback_text（只上屏剩余）
+                if self.server:
+                    await self.server.broadcast({
+                        "type": "replace",
+                        "delete_chars": len(session_text) if changed else 0,
+                        "text": refined_full,
+                        "fallback_text": remaining.strip(),
+                    })
+                logger.info(
+                    f"PTT finalize: replace "
+                    f"(delete={len(session_text) if changed else 0}, "
+                    f"text={len(refined_full)} chars, changed={changed})")
             else:
                 if self.server:
                     await self.server.broadcast({"type": "reset"})
@@ -1016,6 +1034,57 @@ class PTTPipeline:
             self.reset()
         finally:
             self._finalizing = False
+
+    async def finalize_interrupt(self):
+        """打断收尾（共存方案 A）：润色剩余黄区绿区后提交，放行拼音。
+
+        与 finalize（松开）的区别：
+          - 松开：全文终审 + replace 删除重推（光标还在语音末尾，能改开头错字）
+          - 打断：只润色【剩余】并 interrupt_commit（光标即将移走——用户
+            要打字/切焦点，已上屏的开头错字无法安全删除重推，否则会误删
+            用户后续输入），故不做全文终审、不删除重推。
+
+        ★ interrupt_done 必须在 finally 里发：无论润色成败都放行被前端
+        暂扣的打断按键，否则该键会被永久吞掉。
+        """
+        self._finalizing = True
+        try:
+            # 取消在途的绿区润色
+            if self._refine_task and not self._refine_task.done():
+                self._refine_task.cancel()
+            self._refine_task = None
+
+            # 全部推绿
+            self.buffer._yellow_end = len(self.buffer._chars)
+            self.buffer._green_end = self.buffer._yellow_end
+            self.buffer._last_green_modified = time.time()
+
+            remaining = self.buffer.full_text  # 只取剩余（未上屏部分）
+
+            if remaining.strip():
+                # ★ 只润色剩余（不拼已上屏，不做全文终审）
+                refined = remaining.strip()
+                if self.llm_optimizer:
+                    result = await self._refine_final(remaining)
+                    if result and result.strip():
+                        refined = result.strip()
+                # ★ interrupt_commit：前端假上屏通道会把已假上屏的
+                #   fakeCommitted + 剩余拼接真上屏；真上屏通道直接上屏剩余
+                if self.server:
+                    await self.server.broadcast(
+                        {"type": "interrupt_commit", "text": refined})
+                logger.info(
+                    f"PTT interrupt: committed remaining {len(refined)} chars")
+            else:
+                if self.server:
+                    await self.server.broadcast({"type": "reset"})
+
+            self.reset()
+        finally:
+            self._finalizing = False
+            # ★ 放行被前端暂扣的打断按键（无内容也要放行）
+            if self.server:
+                await self.server.broadcast({"type": "interrupt_done"})
 
     async def _refine_final(self, raw: str) -> str:
         """松手终审：长文本按语义边界切成 ≤35 字的段并行润色。
@@ -1035,7 +1104,8 @@ class PTTPipeline:
         prev_ctxs, next_ctxs = [], []
         for i, c in enumerate(chunks):
             if i == 0:
-                prev_ctxs.append(self._committed_tail[-self.PREV_CONTEXT_CHARS:])
+                prev_ctxs.append(
+                    self._session_committed_text[-self.PREV_CONTEXT_CHARS:])
             else:
                 prev_ctxs.append(chunks[i - 1][-self.PREV_CONTEXT_CHARS:])
             if i + 1 < len(chunks):
@@ -1113,10 +1183,10 @@ class PTTPipeline:
         这里通过 create_task 将异步 broadcast 调度到 event loop。
         """
         if text:
-            # ★ 累积已定稿文本（容量扩到 800 字，尾部 40 字供
-            # 拼接，更早部分作前文参考——用词一致性锚点）
-            self._committed_tail = (
-                self._committed_tail + text)[-self.COMMITTED_TAIL_CAP:]
+            # ★ 累积本次会话已上屏全文（含 pad 尾空格，与应用实际
+            # 内容逐字符一致）。数据只存这一份：润色上下文（prev/bg）
+            # 与 finalize 删除重推长度均从它临时取段，不再维护滑窗副本
+            self._session_committed_text += text
         if self.server and text:
             try:
                 async def _push():

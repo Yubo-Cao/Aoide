@@ -253,7 +253,9 @@ def main():
         if server:
             await server.broadcast({"type": "reset"})
 
-    async def on_stop_listening():
+    async def _stop_impl(interrupt: bool):
+        """PTT 停止公共实现。interrupt=True 为打断（只润色剩余提交），
+        False 为松开（全文终审删除重推）。"""
         audio_capture.stop_listening()
         # ★ 等待最后一次离线纠正完成（小步轮询，完成即走，不固定睡 0.5s）
         if asr_engine:
@@ -264,11 +266,21 @@ def main():
             # ★ 尾部音频补刀：流式解码有延迟，松键太快时尾巴
             # 音频还没进过文本（实录："怎么样"只上屏到"怎"）
             await asr_engine.flush_final_offline()
-        await _pipeline.finalize()
+        if interrupt:
+            await _pipeline.finalize_interrupt()
+        else:
+            await _pipeline.finalize()
         # ★ 立即停止 ASR 后台任务，防止空转
         # 下次 on_start_listening 时重新启动
         if asr_engine:
             await asr_engine.stop_processing()
+
+    async def on_stop_listening():
+        await _stop_impl(interrupt=False)
+
+    async def on_interrupt():
+        """打断收尾：用户按其他键/切焦点，润色剩余后放行拼音。"""
+        await _stop_impl(interrupt=True)
 
     async def on_toggle():
         if audio_capture.is_listening:
@@ -335,6 +347,7 @@ def main():
     server.on_audio_data = on_audio_data
     server.on_start_listening = on_start_listening
     server.on_stop_listening = on_stop_listening
+    server.on_interrupt = on_interrupt
     server.on_toggle = on_toggle
     server.on_reset = on_reset
     server.on_commit_now = on_commit_now

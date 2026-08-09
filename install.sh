@@ -49,8 +49,15 @@ if [ "$ACTION" = "uninstall" ]; then
     echo "=========================================="
     echo ""
 
-    # 1. 停止后端
+    # 1. 停止后端（systemd 用户服务 + 兼容旧版 nohup 进程）
     echo -e "${YELLOW}[1/6] 停止后端服务...${NC}"
+    systemctl --user stop yuhuang-backend 2>/dev/null && \
+        echo "  ✓ Backend service stopped" || true
+    systemctl --user disable yuhuang-backend 2>/dev/null && \
+        echo "  ✓ Backend autostart disabled" || true
+    rm -f ~/.config/systemd/user/yuhuang-backend.service && \
+        echo "  ✓ Removed systemd user service" || true
+    systemctl --user daemon-reload 2>/dev/null || true
     if [ -S /tmp/yuhuang-backend.sock ]; then
         rm -f /tmp/yuhuang-backend.sock
         echo "  ✓ Unix socket removed"
@@ -436,19 +443,23 @@ else
     echo "    如需重置: rm ~/.config/yuhuang/config.yaml && $0"
 fi
 
-# 复制 fcitx5 GUI 配置
+# 复制 fcitx5 GUI 配置（仅在用户没有配置时提供默认，避免覆盖用户已调好的设置）
 mkdir -p ~/.config/fcitx5/conf
 if [ -f "$SCRIPT_DIR/build/src/engine/yuhuang.conf" ]; then
-    cp "$SCRIPT_DIR/build/src/engine/yuhuang.conf" ~/.config/fcitx5/conf/yuhuang.conf
-    echo -e "  ${GREEN}✓${NC} fcitx5 GUI 配置: ~/.config/fcitx5/conf/yuhuang.conf"
+    if [ ! -f ~/.config/fcitx5/conf/yuhuang.conf ]; then
+        cp "$SCRIPT_DIR/build/src/engine/yuhuang.conf" ~/.config/fcitx5/conf/yuhuang.conf
+        echo -e "  ${GREEN}✓${NC} fcitx5 GUI 配置: ~/.config/fcitx5/conf/yuhuang.conf"
+    else
+        echo -e "  ${YELLOW}○${NC} fcitx5 GUI 配置已存在，跳过（如需重置: rm ~/.config/fcitx5/conf/yuhuang.conf && $0）"
+    fi
 fi
 
-# ── 8. 启动后端服务 ──────────────────────────────
+# ── 8. 安装并启动后端服务（systemd 用户服务，开机自启）────────
 
 echo ""
-echo -e "${CYAN}═══ 启动后端服务 ═══${NC}"
+echo -e "${CYAN}═══ 安装并启动后端服务 ═══${NC}"
 
-# 先杀掉旧进程
+# 先停掉旧的 nohup 手动进程（兼容旧版本留下的）
 OLD_PIDS=$(pgrep -f "yuhuang-backend" 2>/dev/null || true)
 if [ -n "$OLD_PIDS" ]; then
     echo -e "  ${YELLOW}○${NC} 停止旧后端进程..."
@@ -456,21 +467,26 @@ if [ -n "$OLD_PIDS" ]; then
     sleep 1
 fi
 
-# 在后台启动
-source "$VENV_DIR/bin/activate"
-nohup yuhuang-backend > "$HOME/.config/yuhuang/backend.log" 2>&1 &
-BACKEND_PID=$!
-deactivate
+# 安装 systemd 用户服务：开机自启 + 崩溃自动重启(Restart=on-failure)
+mkdir -p ~/.config/systemd/user
+sed -e "s|@VENV_DIR@|$VENV_DIR|g" \
+    -e "s|@LOG_FILE@|$HOME/.config/yuhuang/backend.log|g" \
+    "$SCRIPT_DIR/systemd/yuhuang-backend.service.in" \
+    > ~/.config/systemd/user/yuhuang-backend.service
+systemctl --user daemon-reload
+systemctl --user enable --now yuhuang-backend 2>&1
 
-# 等一会儿看是否启动成功
-sleep 2
-if kill -0 "$BACKEND_PID" 2>/dev/null; then
-    echo -e "  ${GREEN}✓${NC} 后端服务已启动 (PID: $BACKEND_PID)"
+# 等几秒确认启动成功
+sleep 3
+if systemctl --user is-active --quiet yuhuang-backend; then
+    echo -e "  ${GREEN}✓${NC} 后端服务已启动 (systemd user service)"
+    echo -e "  ${GREEN}✓${NC} 已设置开机自启: systemctl --user enable yuhuang-backend"
     echo -e "  ${GREEN}✓${NC} 日志: ~/.config/yuhuang/backend.log"
+    echo -e "  ${GREEN}✓${NC} 管理: systemctl --user status/restart yuhuang-backend"
 else
     echo -e "  ${YELLOW}⚠ 后端启动失败，请手动检查:${NC}"
-    echo "     source ${VENV_DIR}/bin/activate && yuhuang-backend --verbose"
-    echo "     cat ~/.config/yuhuang/backend.log"
+    echo "     systemctl --user status yuhuang-backend"
+    echo "     tail -50 ~/.config/yuhuang/backend.log"
 fi
 
 # ── 9. 刷新 fcitx5 ──────────────────────────────
