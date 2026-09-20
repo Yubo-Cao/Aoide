@@ -89,6 +89,18 @@ bool YuHuangEngine::isTriggerKey(const fcitx::Key &k) const {
 // ---- Apply config to engine state ----
 void YuHuangEngine::applyConfig() {
     triggerKeys_ = config_.triggerKey.value();
+    // 空列表意味着 PTT 完全没法触发，而最容易走到这里的情况是升级：
+    // 老配置里的标量 TriggerKey=... 不会被列表 marshaller 解析（它要的是
+    // TriggerKey/0=...），于是静默变成空列表。宁可退回默认键并且吵一声，
+    // 也不要让用户对着一个永远不响应的输入法。
+    if (triggerKeys_.empty()) {
+        triggerKeys_ = fcitx::KeyList{fcitx::Key("Pause")};
+        std::cerr << "[YuHuang] WARNING: TriggerKey is empty -- falling back "
+                     "to Pause. A scalar 'TriggerKey=<key>' from an older "
+                     "config is not read as a list; write 'TriggerKey/0=<key>' "
+                     "instead, or set it once in fcitx5-configtool."
+                  << std::endl;
+    }
     triggerMode_ = config_.triggerMode.value();
 
     std::cout << "[YuHuang] Config loaded: trigger="
@@ -567,6 +579,19 @@ PanelWindow *YuHuangEngine::panel() {
 #ifdef YUHUANG_HAVE_PANEL
     if (!panelTried_) {
         panelTried_ = true;   // 只试一次，连不上 X 就永远走候选栏回退
+
+        // 自绘窗把自己摆在应用光标矩形的根窗口坐标上，这在 Wayland 会话里
+        // 没有意义：Wayland 原生客户端的光标位置通过 text-input 上报，是
+        // surface 局部坐标，映射不到 X 根窗口。XWayland 却总能开出 display，
+        // 所以"能连上 X"不等于"处在 X11 会话"——照着连接是否成功来判断，
+        // 草稿窗就会飘到某块屏幕的角落。改按会话类型判断，把 Wayland 交回
+        // fcitx5 候选栏，由 fcitx5 通过输入法协议正确定位。
+        if (const char *wl = getenv("WAYLAND_DISPLAY"); wl && *wl) {
+            logPtt("panel: Wayland session, using the candidate bar "
+                   "(the self-drawn panel can only position itself on X11)");
+            return nullptr;
+        }
+
         auto w = std::make_unique<PanelWindow>();
         if (w->available()) {
             panelWindow_ = std::move(w);
