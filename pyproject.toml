@@ -10,6 +10,11 @@ description = "YuHuang voice input method backend: FunASR + VAD + LLM optimizati
 requires-python = ">=3.11"
 dependencies = [
     "funasr>=1.2.7",
+    # FunASR extracts fbank features through torchaudio; without it (and
+    # without the kaldi-native-fbank fallback) every generate() call raises
+    # ImportError and recognition silently returns empty text.
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
     "numpy>=1.24.0",
     "httpx>=0.27.0",
     "pynput>=1.7.7",

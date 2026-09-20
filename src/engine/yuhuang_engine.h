@@ -43,10 +43,13 @@ FCITX_CONFIG_ENUM(PttMode, Hold, Toggle);
 FCITX_CONFIGURATION(YuHuangConfig,
 
     // ---- 触发键 (PTT) ----
-    fcitx::Option<fcitx::Key, fcitx::KeyConstrain> triggerKey{
+    // 可以列多个键，任意一个都能触发。修饰键组合在 fcitx5 里是有顺序的
+    // ——先按 Ctrl 再按 Alt 是 Control+Alt_L，反过来是 Alt+Control_L，
+    // 是两个不同的 Key——所以"不管先按哪个都行"必须靠列表表达。
+    fcitx::KeyListOption triggerKey{
         this, "TriggerKey", "Trigger key",
-        fcitx::Key("Pause"),
-        fcitx::KeyConstrain(
+        fcitx::KeyList{fcitx::Key("Pause")},
+        fcitx::KeyListConstrain(
             fcitx::KeyConstrainFlags{}
             | fcitx::KeyConstrainFlag::AllowModifierOnly
             | fcitx::KeyConstrainFlag::AllowModifierLess)
@@ -294,6 +297,11 @@ public:
 private:
     void applyConfig();
     void checkSystemConflict(const fcitx::Key &key);
+    // 触发键里出现过的全部修饰键，取并集。录音中判断"这个修饰键是不是
+    // 触发组合的一部分"时用它，否则列表里第二个键的修饰键会被当成打断。
+    fcitx::KeyStates triggerModifierUnion() const;
+    std::string triggerKeysToString() const;
+    bool isTriggerKey(const fcitx::Key &k) const;
     void sendConfigToBackend();
 
     // ★ 全局事件处理（addon 模式，PreInputMethod 阶段）
@@ -317,7 +325,7 @@ private:
     YuHuangConfig config_;
 
     // PTT 触发键与录音状态
-    fcitx::Key triggerKey_;
+    fcitx::KeyList triggerKeys_;
     PttMode triggerMode_ = PttMode::Hold;
     bool isRecording_ = false;
     uint64_t recordingStartTime_ = 0;  // ★ PTT 按下的事件时间（打断去抖基准，同 keyEvent.time() 的 int 语义，用无符号避免回绕）

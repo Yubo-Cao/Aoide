@@ -53,13 +53,46 @@ static const std::unordered_set<std::string> kKnownConflicts = {
     "Print", "Scroll_Lock",
 };
 
+// 触发键里出现过的全部修饰键取并集。
+fcitx::KeyStates YuHuangEngine::triggerModifierUnion() const {
+    fcitx::KeyStates all;
+    for (const auto &k : triggerKeys_) {
+        all |= k.states();
+        // 纯修饰键触发（如 Control+Super_L）时，作为主键的那个修饰键本身
+        // 不在 states() 里，要从 sym 补回来，否则按住期间它会被当成打断。
+        all |= fcitx::Key::keySymToStates(k.sym());
+    }
+    return all;
+}
+
+std::string YuHuangEngine::triggerKeysToString() const {
+    std::string out;
+    for (const auto &k : triggerKeys_) {
+        if (!out.empty()) out += " / ";
+        out += k.toString();
+    }
+    return out.empty() ? std::string("<none>") : out;
+}
+
+// sym 相同 + 实际修饰键包含该触发键要求的修饰键。
+// 只比 sym 会误吞普通键（实录：TriggerKey=Ctrl+Alt+Shift+Y 后 Shift+Y
+// 输入大写失效，因为 Y 的 sym 被当成 PTT 吞掉）。
+bool YuHuangEngine::isTriggerKey(const fcitx::Key &k) const {
+    for (const auto &t : triggerKeys_) {
+        if (k.sym() != t.sym()) continue;
+        auto required = t.states();
+        if ((k.states() & required) == required) return true;
+    }
+    return false;
+}
+
 // ---- Apply config to engine state ----
 void YuHuangEngine::applyConfig() {
-    triggerKey_ = config_.triggerKey.value();
+    triggerKeys_ = config_.triggerKey.value();
     triggerMode_ = config_.triggerMode.value();
 
     std::cout << "[YuHuang] Config loaded: trigger="
-              << triggerKey_.toString()
+              << triggerKeysToString()
               << ", mode="
               << (triggerMode_ == PttMode::Toggle ? "toggle" : "hold")
               << ", backend=" << config_.backendSocket.value()
@@ -68,7 +101,9 @@ void YuHuangEngine::applyConfig() {
               << std::endl;
 
     if (config_.checkConflicts.value()) {
-        checkSystemConflict(triggerKey_);
+        for (const auto &k : triggerKeys_) {
+            checkSystemConflict(k);
+        }
     }
 
     if (backend_ && backend_->isConnected()) {
@@ -280,7 +315,7 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
         sendConfigToBackend();
         std::cout << "[YuHuang] Ready for push-to-talk ("
                   << (triggerMode_ == PttMode::Toggle ? "toggle" : "hold")
-                  << " " << triggerKey_.toString() << " to speak)" << std::endl;
+                  << " " << triggerKeysToString() << " to speak)" << std::endl;
     } else {
         std::cerr << "[YuHuang] Warning: Backend not available at "
                   << config_.backendSocket.value() << std::endl;
@@ -310,17 +345,7 @@ void YuHuangEngine::onGlobalKey(fcitx::KeyEvent &keyEvent) {
         }
     }
 
-    // ★ 组合键匹配：sym 相同 + 修饰键 states 包含 triggerKey 的修饰键。
-    // 只比 sym 会误吞普通键（实录：TriggerKey=Ctrl+Alt+Shift+Y 后
-    // Shift+Y 输入大写失效，因为 Y 的 sym 被当成 PTT 吞掉）。
-    auto isTrigger = [&](const fcitx::Key &k) -> bool {
-        if (k.sym() != triggerKey_.sym()) return false;
-        auto required = triggerKey_.states();
-        auto actual = k.states();
-        return (actual & required) == required;
-    };
-
-    if (isTrigger(key)) {
+    if (isTriggerKey(key)) {
         keyEvent.filterAndAccept();
         if (triggerMode_ == PttMode::Toggle) {
             // ★ Toggle 模式：按一下开始、再按一下结束，release 一律忽略。
@@ -383,7 +408,7 @@ void YuHuangEngine::onGlobalKey(fcitx::KeyEvent &keyEvent) {
             //    → 用户有意按键，照常打断。
             auto modStates = key.states()
                              | fcitx::Key::keySymToStates(key.sym());
-            if (!(modStates & ~triggerKey_.states())) {
+            if (!(modStates & ~triggerModifierUnion())) {
                 logPtt(std::string("PTT: ignore modifier (trigger combo component) ")
                        + key.toString());
                 return;
@@ -483,7 +508,9 @@ void YuHuangEngine::releasePendingKey() {
 
 void YuHuangEngine::startPttWatchdog() {
     // X11 不可用（Wayland 会话/无 DISPLAY）时不启用，保留另外两层防御
-    if (x11WatchKeyBegin(triggerKey_.sym()) < 0) {
+    // 看门狗一次只能盯一个 sym：用列表里第一个。多键时其余键少了这层
+    // X11 兜底，另外两层防御（release 事件、rescue-press）仍然有效。
+    if (triggerKeys_.empty() || x11WatchKeyBegin(triggerKeys_.front().sym()) < 0) {
         logPtt("PTT watchdog unavailable (no X11), "
                "rescue-press is the only defense");
         return;
