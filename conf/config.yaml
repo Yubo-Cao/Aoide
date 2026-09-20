@@ -30,11 +30,27 @@ vad:
 
 # ASR (Automatic Speech Recognition) settings
 asr:
-  # FunASR model names
+  # FunASR model names. Every one of these is loaded by name; leaving a model
+  # empty skips loading it (online_model is the only required one, plus at
+  # least one of offline_model / sense_voice_model).
+  #
+  # online_model      流式草稿模型。paraformer-zh 是中文模型，英文段落在草稿
+  #                   阶段会比较难看 —— 那是红区，本来就会被离线模型改写。
+  # sense_voice_model 离线修正的主力。SenseVoiceSmall 是多语言的，自带 ITN
+  #                   和标点，中英混说靠它。
+  # offline_model     SenseVoice 返回空时的后备（paraformer + ct-punc）。
+  #                   显存紧张时可以留空关掉。
   online_model: paraformer-zh-streaming
+  sense_voice_model: iic/SenseVoiceSmall
   offline_model: damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch
-  vad_model: fsmn-vad
-  punc_model: ct-punc
+  vad_model: damo/speech_fsmn_vad_zh-cn-16k-common-pytorch
+  punc_model: damo/punc_ct-transformer_zh-cn-common-vocab272727-pytorch
+
+  # SenseVoice 解码语种: auto | zh | en | yue | ja | ko
+  # auto 会启用 SenseVoice 的语种判别头，是中英混说（code-switching）唯一
+  # 正确的选项。锁成 zh 会让模型把英文按中文解码。
+  language: auto
+
   # Intermediate result push interval (seconds)
   intermediate_interval: 0.3
   # Compute device: "cuda" (auto-detect GPU 0), "cuda:1" (GPU 1), "mps" (Apple GPU), "cpu"

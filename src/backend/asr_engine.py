@@ -70,12 +70,18 @@ class ASREngine:
         offline_model: str = "damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
         vad_model: str = "fsmn-vad",
         punc_model: str = "ct-punc",
+        sense_voice_model: str = "iic/SenseVoiceSmall",
+        language: str = "auto",
         sample_rate: int = 16000,
         intermediate_interval: float = 0.3,
         device: str = "cuda",
     ):
         self.sample_rate = sample_rate
         self.intermediate_interval = intermediate_interval
+        # SenseVoice decode language. "auto" runs its language-identification
+        # head, which is what code-switched speech needs; pinning a single
+        # language makes the model decode the other one as if it were this one.
+        self.language = language
         self._intermediate_callback: Optional[Callable] = None
         self._offline_callback: Optional[Callable] = None
         self._models_loaded = False
@@ -120,50 +126,50 @@ class ASREngine:
         self._sense_voice_model = None  # SenseVoiceSmall for mixed zh-en (offline)
 
         # 加载模型
-        self._load_models(online_model, offline_model, vad_model, punc_model)
+        self._load_models(online_model, offline_model, vad_model, punc_model,
+                          sense_voice_model)
 
     # ── 模型加载 ──────────────────────────────────────
 
-    def _load_models(self, online_model, offline_model, vad_model, punc_model):
-        """加载 FunASR 模型（使用检测到的 GPU/CPU 设备）"""
+    def _load_models(self, online_model, offline_model, vad_model, punc_model,
+                     sense_voice_model):
+        """加载 FunASR 模型（使用检测到的 GPU/CPU 设备）
+
+        每个模型名都取自配置。名字留空表示不加载该模型 —— 在 8GB 显存的
+        笔记本 GPU 上，五个模型同时常驻并不总是划算，而 SenseVoice 已经
+        自带 ITN 和标点，paraformer + ct-punc 这条后备链路可以关掉。
+        """
         try:
             from funasr import AutoModel
 
-            logger.info(f"Loading VAD model: {vad_model}  (device={self.device})")
-            self._vad_model = AutoModel(
-                model="damo/speech_fsmn_vad_zh-cn-16k-common-pytorch",
-                device=self.device,
-                disable_update=True,
-            )
+            def load(label: str, name: str, optional: bool = False):
+                if not name:
+                    if optional:
+                        logger.info(f"{label}: disabled by config (empty name)")
+                        return None
+                    raise ValueError(f"{label} must be configured")
+                logger.info(f"Loading {label}: {name}  (device={self.device})")
+                return AutoModel(
+                    model=name,
+                    device=self.device,
+                    disable_update=True,
+                )
 
-            logger.info(f"Loading online ASR model: {online_model}  (device={self.device})")
-            self._online_model = AutoModel(
-                model=online_model,
-                device=self.device,
-                disable_update=True,
-            )
+            self._vad_model = load("VAD model", vad_model, optional=True)
+            self._online_model = load("online ASR model", online_model)
+            self._offline_model = load("offline ASR model", offline_model,
+                                       optional=True)
+            self._punc_model = load("punctuation model", punc_model,
+                                    optional=True)
+            self._sense_voice_model = load("SenseVoice model",
+                                           sense_voice_model, optional=True)
 
-            logger.info(f"Loading offline ASR model: {offline_model}  (device={self.device})")
-            self._offline_model = AutoModel(
-                model=offline_model,
-                device=self.device,
-                disable_update=True,
-            )
+            if self._offline_model is None and self._sense_voice_model is None:
+                raise ValueError(
+                    "at least one of offline_model / sense_voice_model must be set"
+                )
 
-            logger.info(f"Loading punctuation model: {punc_model}  (device={self.device})")
-            self._punc_model = AutoModel(
-                model="damo/punc_ct-transformer_zh-cn-common-vocab272727-pytorch",
-                device=self.device,
-                disable_update=True,
-            )
-
-            logger.info(f"Loading SenseVoiceSmall for offline correction  (device={self.device})")
-            self._sense_voice_model = AutoModel(
-                model="iic/SenseVoiceSmall",
-                device=self.device,
-                disable_update=True,
-            )
-
+            logger.info(f"SenseVoice decode language: {self.language}")
             self._models_loaded = True
             logger.info("All ASR models loaded successfully")
 
@@ -527,7 +533,7 @@ class ASREngine:
             if self._sense_voice_model:
                 res = self._sense_voice_model.generate(
                     input=audio_float,
-                    language="zh",
+                    language=self.language,
                     use_itn=True,
                 )
                 if res and len(res) > 0:
@@ -546,7 +552,9 @@ class ASREngine:
                 )
                 return ""
 
-            # Fallback: 原始 paraformer 离线模型
+            # Fallback: 原始 paraformer 离线模型（可被配置关闭）
+            if self._offline_model is None:
+                return ""
             res = self._offline_model.generate(input=audio_float)
             if res and len(res) > 0:
                 text = res[0].get("text", "")
@@ -867,7 +875,7 @@ class ASREngine:
             if self._sense_voice_model:
                 res = self._sense_voice_model.generate(
                     input=audio_float,
-                    language="zh",
+                    language=self.language,
                     use_itn=True,
                 )
                 if res and len(res) > 0:
@@ -883,7 +891,9 @@ class ASREngine:
                 else:
                     logger.info("SenseVoice ASR returned no result, falling back to paraformer")
 
-            # Fallback: paraformer + punctuation
+            # Fallback: paraformer + punctuation（可被配置关闭）
+            if self._offline_model is None:
+                return ""
             res = self._offline_model.generate(input=audio_float)
             if not res or len(res) == 0:
                 logger.info("Offline ASR returned no result")
@@ -895,7 +905,7 @@ class ASREngine:
                 return ""
 
             # 标点恢复（短文本 ≤500 字）
-            if len(text) <= 500:
+            if len(text) <= 500 and self._punc_model is not None:
                 try:
                     punc_res = self._punc_model.generate(input=text)
                     if punc_res and len(punc_res) > 0:
