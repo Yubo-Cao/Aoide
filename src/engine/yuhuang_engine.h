@@ -349,6 +349,10 @@ private:
 
     // ★ 看门狗：200ms 轮询物理键位，连续 2 次未按下判定丢松键
     std::unique_ptr<fcitx::EventSourceTime> pttWatchdog_;
+    // 断连后的后台重连。只靠按键驱动重连的话，后端重启（升级、换模型、
+    // 崩溃自愈）之后第一次按触发键会被重连本身吃掉，不会开始录音。
+    std::unique_ptr<fcitx::EventSourceTime> reconnectTimer_;
+    bool tryReconnect();
     int watchdogMisses_ = 0;
 
     // 后端客户端

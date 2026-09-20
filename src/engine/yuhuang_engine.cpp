@@ -166,6 +166,18 @@ void YuHuangEngine::sendConfigToBackend() {
     backend_->sendCommand(cmd);
 }
 
+// 断连时尝试重连一次。已连接则什么都不做，返回当前是否已连上。
+bool YuHuangEngine::tryReconnect() {
+    if (!backend_) return false;
+    if (backend_->isConnected()) return true;
+    backend_->disconnect();
+    if (!backend_->connect()) return false;
+    backend_->startReceiveLoop();
+    sendConfigToBackend();
+    std::cout << "[YuHuang] Backend reconnected" << std::endl;
+    return true;
+}
+
 // ---- Constructor / Destructor ----
 YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
     : instance_(instance),
@@ -183,6 +195,18 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
 
     // 将跨线程调度器挂载到 fcitx5 事件循环
     eventDispatcher_.attach(&instance_->eventLoop());
+
+    // 后台重连：后端是个会独立重启的 systemd 用户服务（升级、换模型、
+    // Restart=on-failure 自愈），重启后 addon 必须自己接回去，否则输入法
+    // 表面上正常、按下去却毫无反应。2s 一轮，连上后回调即变成空操作。
+    reconnectTimer_ = instance_->eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + 2000000, 100000,
+        [this](fcitx::EventSourceTime *source, uint64_t) {
+            tryReconnect();
+            source->setNextInterval(2000000);
+            source->setOneShot();
+            return true;
+        });
 
     // ★ 注册全局按键监听（PreInputMethod 阶段，在拼音等输入法之前拿到按键）
     // PTT 专用键 → 开始/结束录音；其他键+录音中 → 打断暂扣；否则放行给拼音
@@ -348,14 +372,9 @@ void YuHuangEngine::onGlobalKey(fcitx::KeyEvent &keyEvent) {
     const fcitx::Key &key = keyEvent.key();
     bool isRelease = keyEvent.isRelease();
 
-    // ★ 自动重连：backend 断连后在任意按键时尝试重连
-    if (backend_ && !backend_->isConnected()) {
-        backend_->disconnect();
-        if (backend_->connect()) {
-            backend_->startReceiveLoop();
-            sendConfigToBackend();
-        }
-    }
+    // ★ 按键驱动的重连：定时器最多 2s 才轮一次，这里让"断连后立刻按键"
+    // 也能马上恢复，不必等下一个 tick。
+    tryReconnect();
 
     if (isTriggerKey(key)) {
         keyEvent.filterAndAccept();
