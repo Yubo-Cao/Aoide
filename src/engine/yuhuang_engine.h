@@ -11,6 +11,7 @@
 #include <fcitx-config/configuration.h>
 #include <fcitx-config/option.h>
 #include <fcitx-config/enum.h>
+#include <fcitx-config/iniparser.h>
 #include <string>
 #include <vector>
 #include <memory>
@@ -241,6 +242,9 @@ private:
 // 键与打断信号，语音上屏到当前焦点应用的光标处，实现语音拼音共存。
 class YuHuangEngine : public fcitx::AddonInstance {
 public:
+    // 相对 StandardPath 的 PkgConfig 根，即 ~/.config/fcitx5/conf/yuhuang.conf
+    static constexpr char kConfigPath[] = "conf/yuhuang.conf";
+
     explicit YuHuangEngine(fcitx::Instance *instance);
     ~YuHuangEngine();
 
@@ -250,7 +254,14 @@ public:
     }
     void setConfig(const fcitx::RawConfig &rawConfig) override {
         config_.load(rawConfig, true);
+        fcitx::safeSaveAsIni(config_, kConfigPath);
         applyConfig();
+    }
+    // 从磁盘读回配置。基类的实现是空的，不覆盖它的话构造函数里那次
+    // reloadConfig() 什么也不做，addon 永远跑在编译期默认值上——
+    // fcitx5-configtool 里存的触发键、麦克风、LLM 设置全都读不回来。
+    void reloadConfig() override {
+        fcitx::readAsIni(config_, kConfigPath);
     }
 
     auto factory() const { return &factory_; }
