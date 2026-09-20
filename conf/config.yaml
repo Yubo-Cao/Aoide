@@ -40,6 +40,25 @@ asr:
   #                   和标点，中英混说靠它。
   # offline_model     SenseVoice 返回空时的后备（paraformer + ct-punc）。
   #                   显存紧张时可以留空关掉。
+  #
+  # sense_voice_model 这一槽位可以换成 FunASR 支持的任何离线模型，参数
+  # (language / use_itn) 通用。在 RTX 5070 Laptop (8GB) 上实测，预热后：
+  #
+  #   iic/SenseVoiceSmall      ~0.9GB   多语言，中英混说尚可
+  #   Qwen/Qwen3-ASR-0.6B      ~1.8GB   3s 音频 0.19s / 10s 音频 0.07s
+  #   Qwen/Qwen3-ASR-1.7B      ~4.4GB   3s 音频 0.07s / 10s 音频 0.09s
+  #   Whisper-large-v3-turbo            不建议：固定按 30s 窗口推理，
+  #                                     3s 音频和 30s 一样贵，配不上这里
+  #                                     每 2s 触发一次的增量修正
+  #
+  # Qwen3-ASR 需要额外装 `pip install -U qwen-asr`，Whisper 需要
+  # `pip install -U openai-whisper`。注意 qwen-asr 会把 transformers 降到
+  # 4.x —— SenseVoice 和 paraformer 在降级后仍可用，但 venv 会变杂。
+  #
+  # 1.7B 在 8GB 卡上和桌面会话共存会 OOM（它 4.4GB + 流式模型约 1GB，
+  # 再叠上合成器/编辑器的显存就顶穿了）。8GB 机器请用 0.6B。
+  #
+  # NVIDIA Parakeet 不适用：v2 纯英文、v3 只覆盖欧洲语言，都没有中文。
   online_model: paraformer-zh-streaming
   sense_voice_model: iic/SenseVoiceSmall
   offline_model: damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch
