@@ -25,6 +25,10 @@ dependencies = [
     "websockets>=14",
 ]
 
+[project.optional-dependencies]
+# Amazon Bedrock as the cleanup LLM (llm.base_url: bedrock:<region>)
+bedrock = ["boto3>=1.34"]
+
 [project.scripts]
 yuhuang-backend = "backend.main:main"
 yuhuang-ctl = "tools.yuhuang_ctl:main"

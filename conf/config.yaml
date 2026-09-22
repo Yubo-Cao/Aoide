@@ -79,12 +79,25 @@ asr:
 llm:
   # Enable LLM optimization
   enabled: false
-  # OpenAI-compatible API endpoint
+  # Endpoint. Either an OpenAI-compatible API (https://api.openai.com/v1,
+  # vLLM, Ollama, OpenRouter, ...) or Amazon Bedrock as "bedrock:<region>",
+  # e.g. bedrock:us-east-1 with model global.anthropic.claude-haiku-4-5-20251001-v1:0
   base_url: http://localhost:8000/v1
-  # API key
+  # API key, or env:VARIABLE to read it from the service environment
+  # (unused for Bedrock, which uses the AWS profile below)
   api_key: token-abc123
-  # Model name
+  # Model name (OpenAI: gpt-6-luna / gpt-4.1 / ...; Bedrock: model or inference profile id)
   model: qwen2.5-7b-instruct
+  # OpenAI reasoning models only (gpt-5*/gpt-6*/o*): none | low | medium | high.
+  # "none" keeps cleanup fast; ignored for non-reasoning models.
+  reasoning_effort: ""
+  # Bedrock: named profile from ~/.aws (empty = default credential chain)
+  aws_profile: ""
+  # Seconds to wait for the final cleanup before committing the raw transcript
+  timeout: 25
+  # true: the fcitx5 addon's LLM fields (URL/key/model/...) override this file
+  # on connect. false: this file is authoritative.
+  addon_override: true
   # Temperature (0.0 - 1.0)
   temperature: 0.3
   # Max output tokens
@@ -93,6 +106,43 @@ llm:
   optimize_delay: 0.5
   # Delay before auto-committing after LLM completion (seconds)
   auto_commit_delay: 0.2
+
+# Cloud speech recognition (optional; used when pipeline.commit_on_release is true).
+# Audio leaves the machine only when enabled. Raw (not denoised) audio is sent;
+# nothing is written to disk. Every cloud failure falls back to local recognition.
+cloud_asr:
+  enabled: false
+  # Final transcript source:
+  #   openai               GPT Transcribe on VAD segments after release (batch)
+  #   openai-realtime      final from the OpenAI Realtime session (lowest latency)
+  #   elevenlabs           ElevenLabs Scribe v2 on VAD segments (batch)
+  #   elevenlabs-realtime  final from the Scribe v2 Realtime session
+  provider: openai
+  # Draft shown while the key is held: local (FunASR) | cloud (the provider
+  # vendor's realtime stream; falls back to local mid-utterance on failure)
+  draft: local
+  api_key: env:YUHUANG_OPENAI_API_KEY
+  model: gpt-transcribe               # OpenAI batch model
+  realtime_model: gpt-live-transcribe # OpenAI streaming model
+  languages: [zh, en]                 # OpenAI language hints
+  delay: low                          # gpt-live-transcribe: minimal|low|medium|high|xhigh
+  prompt: ""                          # extra free-text context for OpenAI
+  # Personal dictionary (~/.config/yuhuang/dictionary.yaml):
+  dictionary_prompt: true             # terms as OpenAI batch prompt
+  dictionary_keywords: false          # terms as hard keyword bias (realtime keywords, Scribe keyterms)
+  timeout: 120                        # batch request budget (s)
+  stream_connect_timeout: 5           # WebSocket connect + session setup (s)
+  stream_final_timeout: 10            # wait for realtime final after release (s)
+  stream_max_failures: 3              # failed sessions before pausing streaming
+  stream_cooldown: 600                # pause length (s); auth errors stop until restart
+  fallback_batch: true                # realtime final failed -> same vendor batch
+  local_fallback: true                # all cloud paths failed -> local Qwen3/SenseVoice
+  elevenlabs:
+    api_key: env:YUHUANG_ELEVENLABS_API_KEY
+    model: scribe_v2
+    realtime_model: scribe_v2_realtime
+    language: ""                      # ISO code, empty = auto-detect
+    zero_retention: false             # enable_logging=false (enterprise accounts)
 
 # Pipeline — 三区间提交策略
 pipeline:

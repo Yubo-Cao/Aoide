@@ -1136,9 +1136,12 @@ class PTTPipeline:
         if self.commit_on_release:
             # Preserve sentence context. The legacy 35-character parallel
             # rewrites frequently split English terms and Chinese clauses.
+            timeout = getattr(self.llm_optimizer, "timeout", 25)
+            if not isinstance(timeout, (int, float)):
+                timeout = 25
             try:
                 result = await asyncio.wait_for(
-                    self.llm_optimizer.optimize(raw, urgent=True), timeout=25)
+                    self.llm_optimizer.optimize(raw, urgent=True), timeout=timeout)
                 return result or raw
             except Exception as exc:
                 logger.warning("Final refinement failed (%s); keeping transcript", type(exc).__name__)

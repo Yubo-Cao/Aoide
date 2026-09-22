@@ -77,6 +77,21 @@
 - 去除口语填充词和重复
 - 智能断句和标点
 
+整理模型由 `llm.base_url` 决定：OpenAI 兼容地址（如 `https://api.openai.com/v1` 配 `gpt-6-luna` 或 `gpt-4.1`），或 Amazon Bedrock（`bedrock:us-east-1` 配 `global.anthropic.claude-haiku-4-5-20251001-v1:0`，凭据取自 `llm.aws_profile` 指定的 AWS profile，需要 `pip install -e '.[bedrock]'`）。推理模型可用 `llm.reasoning_effort: none` 保持低延迟。整理结果若删字、丢英文或改动数字，会保留识别原文。
+
+###   云端识别（可选）
+
+`cloud_asr.enabled: true` 后，松键时把原始音频（非降噪副本）发送到所选服务识别，失败自动回退本地模型，音频不落盘：
+
+| `cloud_asr.provider` | 最终结果 |
+|---|---|
+| `openai` | 松键后按 VAD 分段并行调用 GPT Transcribe |
+| `openai-realtime` | OpenAI Realtime 流式会话（`gpt-live-transcribe`）的最终结果，松键后约 0.6 秒 |
+| `elevenlabs` | ElevenLabs Scribe v2 分段识别 |
+| `elevenlabs-realtime` | Scribe v2 Realtime 流式会话的最终结果，松键后约 0.2 秒 |
+
+`cloud_asr.draft: cloud` 让按住期间的草稿来自该厂商的流式识别（替代本地 FunASR 草稿）；流式连接中途失败会立即切回本地草稿，不丢失本次录音。流式会话不会自动重连，连续失败后暂停一段时间，鉴权错误后停止到重启。个人词典词条默认作为 OpenAI 识别提示；`dictionary_keywords: true` 会把词条作为强关键词偏置（实测会在噪声中把相近发音误识为词典词，默认关闭）。密钥写成 `env:YUHUANG_OPENAI_API_KEY` / `env:YUHUANG_ELEVENLABS_API_KEY`，由服务环境注入。全部选项见 `conf/config.yaml`。
+
 ###  ⚡ Push-to-Talk，像对讲机一样简单
 
 - 按住触发键（默认**右 Ctrl**）→ 开始说话，候选框实时显示
@@ -259,7 +274,11 @@ YuHuang/
 │   ├── backend/                    # Python 后端服务
 │   │   ├── main.py                 # 服务入口（PTT 流水线编排、LCP 提交逻辑）
 │   │   ├── asr_engine.py           # ASR 引擎（双模型 + 离线修正轮询）
-│   │   ├── llm_optimizer.py        # LLM 文本润色
+│   │   ├── llm_optimizer.py        # LLM 文本润色（OpenAI 兼容 / Bedrock）
+│   │   ├── cloud_asr.py            # 云端识别提供方选择与回退链（OpenAI / ElevenLabs 批量）
+│   │   ├── cloud_stream.py         # 流式识别会话（OpenAI Realtime / Scribe Realtime）
+│   │   ├── speech_frontend.py      # WebRTC 降噪 + Silero VAD 分段
+│   │   ├── personal_dictionary.py  # 个人词典
 │   │   ├── audio_capture.py        # 音频采集（PyAudio）
 │   │   └── unix_server.py          # Unix Domain Socket 服务端
 │   └── tools/

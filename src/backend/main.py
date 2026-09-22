@@ -25,7 +25,7 @@ from backend.audio_capture import AudioCapture
 from backend.unix_server import UnixSocketServer
 from backend.pipeline import PTTPipeline
 from backend.speech_frontend import SpeechFrontend
-from backend.cloud_asr import CloudRecognizer
+from backend.cloud_asr import CloudASR
 
 logger = logging.getLogger("yuhuang")
 
@@ -166,12 +166,10 @@ def main():
     release_only = config.get("pipeline", {}).get("commit_on_release", True)
     frontend = SpeechFrontend(denoise=config.get("audio", {}).get("noise_suppression", True)) if release_only else None
     cloud_config = config.get("cloud_asr", {})
-    cloud_asr = CloudRecognizer(
-        model=cloud_config.get("model", "gpt-transcribe"),
-        api_key=cloud_config.get("api_key", "env:YUHUANG_OPENAI_API_KEY"),
-        mode=cloud_config.get("mode", "file"),
-        prompt=cloud_config.get("prompt", ""),
-    ) if cloud_config.get("enabled", False) else None
+    cloud_asr = CloudASR(cloud_config) if cloud_config.get("enabled", False) and release_only else None
+    if cloud_asr:
+        logger.info("Cloud ASR: provider=%s final=%s draft=%s", cloud_asr.provider,
+                    cloud_asr.model, "cloud" if cloud_asr.cloud_draft else "local")
 
     # ASR engine
     logger.info("Loading ASR models...")
@@ -198,6 +196,15 @@ def main():
 
     # LLM optimizer (initially disabled, enabled by fcitx5 config)
     llm_optimizer = None
+    # YAML-only knobs the addon does not mirror.
+    llm_extras = dict(
+        reasoning_effort=llm_config.get("reasoning_effort", ""),
+        aws_profile=llm_config.get("aws_profile", ""),
+        timeout=float(llm_config.get("timeout", 25)),
+    )
+    # When false, config.yaml is authoritative and the addon's LLM fields
+    # (base_url/model/key/temperature/...) are ignored.
+    addon_llm_override = llm_config.get("addon_override", True)
     if llm_config.get("enabled", False):
         llm_optimizer = LLMOptimizer(
             base_url=llm_config.get("base_url", "http://localhost:8000/v1"),
@@ -208,8 +215,9 @@ def main():
             system_prompt=llm_config.get("system_prompt", ""),
             optimize_delay=llm_config.get("optimize_delay", 0.5),
             auto_commit_delay=llm_config.get("auto_commit_delay", 0.2),
+            **llm_extras,
         )
-        logger.info(f"LLM optimizer configured: {llm_config.get('model', 'unknown')}")
+        logger.info("LLM optimizer configured: %s via %s", llm_optimizer.model, llm_optimizer.provider)
     else:
         logger.info("LLM optimization disabled in config (can be enabled via fcitx5 GUI)")
 
@@ -228,10 +236,34 @@ def main():
     _pipeline = PTTPipeline(server, llm_optimizer, commit_on_release=release_only,
                             result_store=ResultStore())
     _finishing = False
+    _stream = None  # streaming cloud session of the current key press
 
     # ---- Callbacks ----
 
+    def _cloud_draft_active():
+        return _stream is not None and cloud_asr.cloud_draft and _stream.healthy
+
+    async def on_stream_partial(session, text):
+        if session is _stream and cloud_asr.cloud_draft and text:
+            await _pipeline.on_intermediate(text)
+
+    async def on_stream_failure(session, exc):
+        # Degrade to the local draft immediately; the utterance audio is kept
+        # by the frontend, so the final transcript is unaffected.
+        if session is _stream and cloud_asr.cloud_draft and asr_engine:
+            text = asr_engine.get_accumulated_text()
+            if text:
+                await _pipeline.on_intermediate(text)
+
+    async def _drop_stream():
+        nonlocal _stream
+        session, _stream = _stream, None
+        if session is not None:
+            await session.abort()
+
     async def on_audio_data(pcm_data: bytes):
+        if _stream is not None:
+            _stream.feed(pcm_data)  # raw samples; non-blocking enqueue
         if frontend:
             try:
                 pcm_data = frontend.process(pcm_data)
@@ -245,7 +277,7 @@ def main():
 
     async def on_asr_intermediate(text: str):
         """流式模型中间结果"""
-        if text:
+        if text and not _cloud_draft_active():
             await _pipeline.on_intermediate(text)
 
     async def on_asr_offline(text: str, generation: int):
@@ -259,6 +291,7 @@ def main():
 
     # PTT handlers
     async def on_start_listening():
+        nonlocal _stream
         # ★ 防重入：已在监听时的重复 start（典型场景：合成器
         # 吞掉松键事件后用户补按触发键救援）绝不能 reset 洗掉
         # 进行中的会话，直接忽略
@@ -283,6 +316,9 @@ def main():
                 asr_engine.start_processing()
             # ★ 绑定 trim 回调：commit 时裁剪已提交音频
             _pipeline.buffer._trim_audio_callback = asr_engine.trim_committed_audio
+        if cloud_asr:
+            await _drop_stream()
+            _stream = cloud_asr.open_session(on_stream_partial, on_stream_failure)
         if server:
             await server.broadcast({"type": "reset"})
 
@@ -315,6 +351,7 @@ def main():
             if asr_engine:
                 await asr_engine.stop_processing()
             if interrupt:
+                await _drop_stream()
                 await _pipeline.finalize_interrupt()
                 return
             # Our public-fixture comparison found that APM suppression can
@@ -324,17 +361,20 @@ def main():
             logger.info("Final-only speech: %d segment(s), %.2fs of %.2fs recording; AEC off",
                         len(chunks), sum(len(c) for c in chunks) / 16000, frontend.samples / 16000)
             if not chunks:
+                await _drop_stream()
                 _pipeline.reset()
                 await server.broadcast({"type": "reset"})
                 return
             text = ""
             if cloud_asr:
                 try:
-                    text = await asyncio.wait_for(cloud_asr.recognize(chunks), timeout=120)
+                    text = await cloud_asr.final(chunks, _stream)
                     logger.info("Cloud ASR completed: %s, %d chars", cloud_asr.model, len(text))
                 except Exception as exc:
                     logger.warning("Cloud ASR failed (%s); using local recognition", type(exc).__name__)
-            if not text and asr_engine:
+                finally:
+                    await _drop_stream()
+            if not text and asr_engine and (cloud_asr is None or cloud_asr.local_fallback):
                 try:
                     text = await asr_engine.transcribe_segments(chunks)
                 except Exception as exc:
@@ -387,7 +427,7 @@ def main():
         """Handle config update from fcitx5 plugin (LLM + audio device)"""
         nonlocal llm_optimizer
 
-        llm_cfg = cmd.get("llm", {})
+        llm_cfg = cmd.get("llm", {}) if addon_llm_override else {}
 
         # Only create/update LLM optimizer when explicitly enabled
         llm_enabled = llm_cfg.get("enabled", llm_optimizer is not None)
@@ -406,6 +446,7 @@ def main():
                 max_tokens=llm_cfg.get("max_tokens", 2000),
                 optimize_delay=llm_cfg.get("optimize_delay", 0.5),
                 auto_commit_delay=llm_cfg.get("auto_commit_delay", 0.2),
+                **llm_extras,
             )
             logger.info(f"LLM optimizer created: {llm_cfg.get('model', 'unknown')}")
         elif llm_optimizer and llm_cfg:
@@ -521,6 +562,7 @@ def main():
         if llm_optimizer:
             await llm_optimizer.close()
         if cloud_asr:
+            await _drop_stream()
             await cloud_asr.close()
         if frontend:
             frontend.close()

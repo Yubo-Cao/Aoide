@@ -1,4 +1,11 @@
-"""LLM text optimizer — streaming OpenAI-compatible API"""
+"""LLM text optimizer — OpenAI-compatible chat completions or Amazon Bedrock.
+
+The provider follows ``base_url``: ``bedrock:<region>`` (for example
+``bedrock:us-east-1``) calls the Bedrock Converse API with ``model`` as the
+model or inference-profile id; anything else is an OpenAI-compatible
+``/chat/completions`` endpoint. Because the fcitx addon mirrors base_url and
+model, both providers can also be selected from the addon GUI.
+"""
 import asyncio
 import json
 import logging
@@ -27,8 +34,17 @@ class LLMOptimizer:
         system_prompt: str = "",
         optimize_delay: float = 0.5,
         auto_commit_delay: float = 0.2,
+        reasoning_effort: str = "",
+        aws_profile: str = "",
+        timeout: float = 25.0,
     ):
         self.base_url = base_url.rstrip("/")
+        # OpenAI reasoning models (gpt-5*/gpt-6*): "none" keeps cleanup fast.
+        self.reasoning_effort = reasoning_effort
+        self.aws_profile = aws_profile
+        self.timeout = timeout
+        self._bedrock = None
+        self._bedrock_key = None
         self.api_key = api_key
         self.model = model
         self.temperature = temperature
@@ -111,10 +127,11 @@ class LLMOptimizer:
         """Update runtime configuration (called when fcitx5 config changes)"""
         for key, value in kwargs.items():
             if hasattr(self, key):
-                if getattr(self, key) != value and key in ("model", "base_url"):
+                if getattr(self, key) != value and key in ("model", "base_url", "api_key"):
                     # 换模型/换端点：关思考梯子重新从第一档摸索
                     self._think_off_idx = 0
                     self._think_warned = False
+                    self._auth_failed = False  # new credentials/endpoint get a fresh try
                 setattr(self, key, value)
                 logger.info("LLM config updated: %s=%s", key,
                             "[REDACTED]" if key == "api_key" else value)
@@ -129,11 +146,17 @@ class LLMOptimizer:
             return value
         return self.api_key
 
+    @property
+    def provider(self) -> str:
+        return "bedrock" if self.base_url.startswith("bedrock:") else "openai"
+
     def _thinking_options(self) -> dict:
         host = urlsplit(self.base_url).hostname
         if host == "api.openai.com":
             # GPT-4.1 has no reasoning mode; vendor-specific flags cause 400s.
-            return {}
+            # Reasoning models take reasoning_effort instead of temperature.
+            reasoning = self.model.startswith(("gpt-5", "gpt-6", "o1", "o3", "o4"))
+            return {"reasoning_effort": self.reasoning_effort} if self.reasoning_effort and reasoning else {}
         if host == "openrouter.ai":
             return {"reasoning": {"enabled": False}}
         return self._THINK_OFF_LADDER[self._think_off_idx]
@@ -229,6 +252,9 @@ class LLMOptimizer:
         if self.optimize_delay > 0 and not urgent:
             await asyncio.sleep(self.optimize_delay)
 
+        if self.provider == "bedrock":
+            return await self._call_bedrock(user_msg)
+
         payload = {
             "model": self.model,
             "messages": [
@@ -241,6 +267,11 @@ class LLMOptimizer:
         }
         think_off = self._thinking_options()
         payload.update(think_off)
+        if "reasoning_effort" in think_off:
+            # Reasoning models reject max_tokens, and temperature unless effort is none.
+            payload["max_completion_tokens"] = payload.pop("max_tokens")
+            if think_off["reasoning_effort"] != "none":
+                payload.pop("temperature")
 
         t0 = time.monotonic()
         try:
@@ -341,9 +372,56 @@ class LLMOptimizer:
 
         return None
 
+    def _bedrock_client(self):
+        """Cached bedrock-runtime client; credentials come from the named AWS
+        profile (``~/.aws``), so the systemd unit needs no AWS environment."""
+        region = self.base_url.split(":", 1)[1].strip("/") or None
+        key = (region, self.aws_profile)
+        if self._bedrock is None or self._bedrock_key != key:
+            import boto3
+            from botocore.config import Config
+            session = boto3.Session(profile_name=self.aws_profile or None, region_name=region)
+            self._bedrock = session.client("bedrock-runtime", config=Config(
+                connect_timeout=5, read_timeout=self.timeout,
+                retries={"total_max_attempts": 2, "mode": "standard"}))
+            self._bedrock_key = key
+        return self._bedrock
+
+    async def _call_bedrock(self, user_msg: str) -> Optional[str]:
+        t0 = time.monotonic()
+        try:
+            client = self._bedrock_client()
+            response = await asyncio.to_thread(
+                client.converse, modelId=self.model,
+                system=[{"text": self.system_prompt}],
+                messages=[{"role": "user", "content": [{"text": user_msg}]}],
+                inferenceConfig={"maxTokens": self.max_tokens, "temperature": self.temperature})
+        except Exception as exc:
+            code = getattr(exc, "response", {}).get("Error", {}).get("Code", "") \
+                if hasattr(exc, "response") else ""
+            if code in ("AccessDeniedException", "UnrecognizedClientException",
+                        "ExpiredTokenException") or type(exc).__name__ in (
+                        "NoCredentialsError", "ProfileNotFound"):
+                self._auth_failed = True
+                logger.error("Bedrock authentication rejected (%s); disabled until backend "
+                             "restart. Keeping original transcript.", code or type(exc).__name__)
+            else:
+                logger.error("Bedrock refinement error: %s %s", type(exc).__name__, code)
+            return None
+        if response.get("stopReason") != "end_turn":
+            logger.warning("Bedrock incomplete output (%s); keeping raw text",
+                           response.get("stopReason"))
+            return None
+        parts = response.get("output", {}).get("message", {}).get("content", [])
+        result = "".join(p.get("text", "") for p in parts).strip()
+        if result:
+            logger.info("LLM result (bedrock %s, %.1fs, %d chars): %s...", self.model,
+                        time.monotonic() - t0, len(result), result[:40])
+        return result or None
+
     def _get_client(self) -> httpx.AsyncClient:
         """长驻 HTTP 连接（base_url 变更时重建）。"""
         if self._client is None or self._client_base_url != self.base_url:
-            self._client = httpx.AsyncClient(timeout=30.0, trust_env=False)
+            self._client = httpx.AsyncClient(timeout=self.timeout, trust_env=False)
             self._client_base_url = self.base_url
         return self._client
