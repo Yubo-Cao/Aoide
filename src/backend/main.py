@@ -431,7 +431,7 @@ def main():
                     _last_mic_notice = now
                     try:
                         proc = await asyncio.create_subprocess_exec(
-                            "notify-send", "Aoide：麦克风没有声音", "请检查麦克风是否静音或选错了设备。")
+                            "notify-send", "聆序：麦克风没有声音", "请检查麦克风是否静音或选错了设备。")
                         await asyncio.wait_for(proc.wait(), timeout=2)
                     except (OSError, asyncio.TimeoutError):
                         logger.warning("Could not display microphone notification")

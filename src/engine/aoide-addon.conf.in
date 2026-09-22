@@ -1,7 +1,7 @@
 [Addon]
 Name=Aoide
-Name[zh_CN]=Aoide
-Name[zh_TW]=Aoide
+Name[zh_CN]=聆序
+Name[zh_TW]=聆序
 Category=Module
 Version=@PROJECT_VERSION@
 Library=aoide

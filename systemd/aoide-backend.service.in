@@ -1,5 +1,5 @@
 [Unit]
-Description=Aoide voice input backend (FunASR ASR + LLM refine)
+Description=聆序 (Aoide) voice input backend (ASR + LLM cleanup)
 # 等图形会话起来（fcitx5 是 autostart 启动，后端随会话启动即可）
 After=graphical-session.target
 

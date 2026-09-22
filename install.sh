@@ -46,7 +46,7 @@ ver_ge() {
 # ─────────────────────────────────────────────────────
 if [ "$ACTION" = "uninstall" ]; then
     echo "=========================================="
-    echo "  Aoide 卸载"
+    echo "  聆序（Aoide）卸载"
     echo "=========================================="
     echo ""
 
@@ -217,7 +217,7 @@ if [ -f "$HOME/.config/systemd/user/aoide-backend.service.d/cloud.conf" ]; then
 fi
 
 echo "=========================================="
-echo "  Aoide 语音输入 — 安装"
+echo "  聆序（Aoide）语音输入 — 安装"
 echo "  $(date '+%Y-%m-%d %H:%M')"
 echo "=========================================="
 echo ""
@@ -262,7 +262,7 @@ fi
 
 # 检查已有插件
 if [ -f /usr/lib/fcitx5/aoide.so ]; then
-    echo -e "  ${GREEN}✓${NC} Aoide 插件已安装 (将升级)"
+    echo -e "  ${GREEN}✓${NC} 聆序插件已安装 (将升级)"
     HAS_PLUGIN=true
 fi
 
@@ -391,7 +391,7 @@ sudo make install
 if [ -f /usr/share/applications/aoide-settings.desktop ]; then
     echo -e "  ${GREEN}✓${NC} KDE 设置入口已安装"
 fi
-echo -e "${GREEN}✓ Aoide fcitx5 插件已安装 (aoide.so)${NC}"
+echo -e "${GREEN}✓ 聆序 fcitx5 插件已安装 (aoide.so)${NC}"
 
 # ── 5. Python 虚拟环境 + 依赖 ─────────────────────
 
@@ -557,10 +557,10 @@ fi
 echo ""
 echo -e "${CYAN}═══ 刷新输入法 ═══${NC}"
 if systemctl --user cat fcitx5.service &>/dev/null; then
-    systemctl --user restart fcitx5.service && echo -e "  ${GREEN}✓${NC} fcitx5 已刷新，Aoide 已就绪" || \
+    systemctl --user restart fcitx5.service && echo -e "  ${GREEN}✓${NC} fcitx5 已刷新，聆序已就绪" || \
         echo -e "  ${YELLOW}○${NC} fcitx5 用户服务未能启动，请检查 systemctl --user status fcitx5${NC}"
 elif command -v fcitx5 &>/dev/null; then
-    fcitx5 -r -d 2>/dev/null && echo -e "  ${GREEN}✓${NC} fcitx5 已刷新，Aoide 已就绪" || \
+    fcitx5 -r -d 2>/dev/null && echo -e "  ${GREEN}✓${NC} fcitx5 已刷新，聆序已就绪" || \
         echo -e "  ${YELLOW}○${NC} fcitx5 未运行，启动后生效${NC}"
 fi
 
@@ -568,7 +568,7 @@ fi
 
 echo ""
 echo "=========================================="
-echo -e "${GREEN}  Aoide 安装完成！${NC}"
+echo -e "${GREEN}  聆序（Aoide）安装完成！${NC}"
 echo "=========================================="
 echo ""
 
@@ -583,8 +583,8 @@ echo "  1. 在任意输入框中使用现有输入法："
 echo "     按住 Ctrl+Alt+Y 开始录音，松开后输入文本"
 echo ""
 echo "  2. 配置密钥、词典和输入选项:"
-echo "     KDE 应用菜单 → Aoide 设置"
-echo "     输入选项在窗口中打开 KDE 输入法设置 → 附加组件 → Aoide → 配置"
+echo "     KDE 应用菜单 → 聆序设置"
+echo "     输入选项在窗口中打开 KDE 输入法设置 → 附加组件 → 聆序 → 配置"
 echo "     或编辑 ~/.config/aoide/config.yaml"
 echo ""
 echo "  3. 使用: 按住 Ctrl+Alt+Y → 说话 → 松开 → 文字上屏"
@@ -593,5 +593,5 @@ echo "  📋 后端日志: tail -f ~/.config/aoide/backend.log"
 echo "  🎤 查看麦克风: aoide-ctl mic"
 echo "  🔄 重启后端: aoide-ctl restart"
 echo "  ⏹  停止后端: aoide-ctl stop"
-echo "  ⚙  fcitx5 配置: fcitx5-configtool → 附加组件 → Aoide → 配置"
+echo "  ⚙  fcitx5 配置: fcitx5-configtool → 附加组件 → 聆序 → 配置"
 echo ""

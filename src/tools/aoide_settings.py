@@ -36,7 +36,7 @@ def T(chinese: str, english: str) -> str:
 class SettingsWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(T("Aoide 设置", "Aoide Settings"))
+        self.setWindowTitle(T("聆序设置", "Aoide Settings"))
         self.resize(720, 520)
         self._dictionary_stamp = None
         self._dictionary_data = {}
@@ -83,7 +83,7 @@ class SettingsWindow(QMainWindow):
             remove.clicked.connect(lambda _=False, s=service: self._remove_key(s))
             row.addWidget(remove)
             layout.addLayout(row)
-        restart = QPushButton(T("重启 Aoide 后端", "Restart Aoide Backend"))
+        restart = QPushButton(T("重启聆序后端", "Restart Aoide Backend"))
         restart.clicked.connect(self._restart_backend)
         layout.addWidget(restart)
         layout.addStretch(1)
@@ -185,7 +185,7 @@ class SettingsWindow(QMainWindow):
         layout = QVBoxLayout(page)
         intro = QLabel(T(
             "触发键、麦克风、预览窗尺寸、识别提供方和整理模型由 fcitx5 管理。"
-            "点击下方按钮，再进入“附加组件 → Aoide → 配置”。",
+            "点击下方按钮，再进入“附加组件 → 聆序 → 配置”。",
             "Fcitx5 manages the shortcut, microphone, preview size, speech provider, "
             "and cleanup model. Open Input Method settings, then Add-ons → Aoide → Configure."))
         intro.setWordWrap(True)

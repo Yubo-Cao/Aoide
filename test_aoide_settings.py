@@ -59,7 +59,7 @@ class DictionarySettingsTests(unittest.TestCase):
 
         with patch("tools.aoide_settings.secret_store.present", return_value=False):
             for language, expected_title, expected_tabs in (
-                ("zh_CN", "Aoide 设置", ["API 密钥", "个人词典", "输入与预览"]),
+                ("zh_CN", "聆序设置", ["API 密钥", "个人词典", "输入与预览"]),
                 ("en_US", "Aoide Settings", ["API Keys", "Personal Dictionary", "Input & Preview"]),
             ):
                 with self.subTest(language=language), patch.dict(os.environ, {"AOIDE_UI_LANG": language}):

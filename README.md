@@ -1,6 +1,6 @@
-# Aoide
+# 聆序 · Aoide
 
-Aoide 是 Linux 上的 fcitx5 语音输入附加组件。按住触发键说话，文字在光标附近预览；松键后识别终稿并输入到原输入框。它与拼音等输入法共存，无需切换输入法。
+聆序（Aoide）是 Linux 上的 fcitx5 语音输入附加组件。按住触发键说话，文字在光标附近预览；松键后识别终稿并输入到原输入框。它与拼音等输入法共存，无需切换输入法。
 
 项目从 [Homio/YuHuang](https://github.com/Homio/YuHuang) 派生，保留原项目的 MIT 版权声明。Aoide 由 Yubo-Cao 独立维护。
 
@@ -10,7 +10,7 @@ Aoide 是 Linux 上的 fcitx5 语音输入附加组件。按住触发键说话�
 - **本地或云端识别**：本地使用 FunASR；可选 OpenAI 或 ElevenLabs 的批量、实时识别。云端失败时可回退本地。启用云端识别会将音频发送到所选服务。
 - **可选 LLM 整理**：删除口头禅与重复，理顺句间逻辑；确有并列事项或步骤时输出 Markdown 列表。保留专有名词、数字及已有省略号。可通过个人词典指定术语；如果整理结果丢失关键内容或词典标准词，使用原识别文本。
 - **焦点切换保护**：录音期间切换窗口会结束录音，并把结果提交到开始录音时的输入框。
-- **KDE 配置入口**：应用菜单中的“Aoide 设置”可管理 API 密钥和个人词典，并打开 fcitx5 的 Aoide 附加组件配置，调整触发键、麦克风、预览和识别选项。独立设置窗口提供简体中文和英文界面，按系统语言选择（也可设置 `AOIDE_UI_LANG=zh` 或 `en`）；KDE 附加组件配置项同时显示中英文名称。
+- **KDE 配置入口**：应用菜单中的“聆序设置”（英文界面为“Aoide Settings”）可管理 API 密钥和个人词典，并打开 fcitx5 的聆序附加组件配置，调整触发键、麦克风、预览和识别选项。独立设置窗口提供简体中文和英文界面，按系统语言选择（也可设置 `AOIDE_UI_LANG=zh` 或 `en`）；KDE 附加组件配置项同时显示中英文名称。
 
 默认触发键为 **Ctrl+Alt+Y**。按住说话，松开后等待终稿。可在 KDE 输入法设置中修改。整理模型只能依据识别文本判断停顿；原文没有停顿信息时，它无法准确补出省略号。
 
@@ -22,9 +22,9 @@ Aoide 是 Linux 上的 fcitx5 语音输入附加组件。按住触发键说话�
 ./install.sh install
 ```
 
-安装后在 KDE 应用菜单搜索 **Aoide 设置**，管理密钥与个人词典。窗口中的“打开 KDE 输入法设置”会进入 fcitx5 设置；在 **附加组件 → Aoide → 配置** 调整录音键、预览窗、LLM 和云端识别。云端设置默认沿用 YAML；勾选 **Use cloud settings below** 后才用图形设置覆盖对应选项。
+安装后在 KDE 应用菜单搜索 **聆序设置**，管理密钥与个人词典。窗口中的“打开 KDE 输入法设置”会进入 fcitx5 设置；在 **附加组件 → 聆序 → 配置** 调整录音键、预览窗、LLM 和云端识别。云端设置默认沿用 YAML；勾选 **覆盖 YAML 云端配置** 后才用图形设置覆盖对应选项。
 
-高级设置在 `~/.config/aoide/config.yaml`。例如可配置降噪、识别模型和云端服务的超时。配置模板见 [conf/config.yaml](conf/config.yaml)。API 密钥由 Aoide 设置窗口存入桌面密码库（Secret Service）；旧的 `env:VARIABLE` 配置仍可用。新安装的 socket 位于 `$XDG_RUNTIME_DIR/aoide/backend.sock`；旧配置里的 `/tmp/yuhuang-backend.sock` 会自动映射到新路径。
+高级设置在 `~/.config/aoide/config.yaml`。例如可配置降噪、识别模型和云端服务的超时。配置模板见 [conf/config.yaml](conf/config.yaml)。API 密钥由聆序设置窗口存入桌面密码库（Secret Service）；旧的 `env:VARIABLE` 配置仍可用。新安装的 socket 位于 `$XDG_RUNTIME_DIR/aoide/backend.sock`；旧配置里的 `/tmp/yuhuang-backend.sock` 会自动映射到新路径。
 
 ```bash
 aoide-ctl status

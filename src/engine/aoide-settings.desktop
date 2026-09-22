@@ -1,12 +1,12 @@
 [Desktop Entry]
 Type=Application
 Name=Aoide Settings
-Name[zh_CN]=Aoide 设置
-Name[zh_TW]=Aoide 設定
+Name[zh_CN]=聆序设置
+Name[zh_TW]=聆序設定
 GenericName=Voice Input Settings
 GenericName[zh_CN]=语音输入设置
 Comment=Manage voice input, API keys, and vocabulary
-Comment[zh_CN]=管理语音输入、API 密钥和个人词典
+Comment[zh_CN]=管理聆序语音输入、API 密钥和个人词典
 Exec=aoide-settings
 TryExec=aoide-settings
 Icon=fcitx

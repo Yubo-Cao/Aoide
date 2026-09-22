@@ -86,7 +86,7 @@ def watchdog(pid: int, limit_mb: int, restart_cmd: list[str] | None = None):
 
         # 1) 尝试发送桌面通知（SIGKILL 之前）
         send_notification(
-            title="⚠️ Aoide 内存超限 — 正在强制重启",
+            title="⚠️ 聆序内存超限 — 正在强制重启",
             body=(
                 f"后端进程已使用 {rss_mb}MB 内存\n"
                 f"超过限制 {limit_mb}MB\n\n"
@@ -116,7 +116,7 @@ def watchdog(pid: int, limit_mb: int, restart_cmd: list[str] | None = None):
 
         # 4) 提交 issue 弹窗
         send_notification(
-            title="🔍 Aoide 内存超限 — 是否提交 Issue？",
+            title="🔍 聆序内存超限 — 是否提交 Issue？",
             body=(
                 f"后端因内存超限 ({rss_mb}MB > {limit_mb}MB) "
                 f"被守护进程强制重启。\n"

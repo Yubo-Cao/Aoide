@@ -6,9 +6,9 @@ import subprocess
 
 SERVICES = frozenset({"openai", "elevenlabs", "llm"})
 LABELS = {
-    "openai": "Aoide · OpenAI transcription",
-    "elevenlabs": "Aoide · ElevenLabs transcription",
-    "llm": "Aoide · LLM cleanup",
+    "openai": "聆序（Aoide）· OpenAI 语音识别",
+    "elevenlabs": "聆序（Aoide）· ElevenLabs 语音识别",
+    "llm": "聆序（Aoide）· 大模型整理",
 }
 
 
