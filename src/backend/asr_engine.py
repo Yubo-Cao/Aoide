@@ -75,8 +75,10 @@ class ASREngine:
         sample_rate: int = 16000,
         intermediate_interval: float = 0.3,
         device: str = "cuda",
+        final_on_release: bool = False,
     ):
         self.sample_rate = sample_rate
+        self.final_on_release = final_on_release
         self.intermediate_interval = intermediate_interval
         # SenseVoice decode language. "auto" runs its language-identification
         # head, which is what code-switched speech needs; pinning a single
@@ -333,7 +335,8 @@ class ASREngine:
         if self._processing_task is None:
             self._running = True
             self._processing_task = asyncio.create_task(self._processing_loop())
-            self._offline_task = asyncio.create_task(self._periodic_offline_correction())
+            if not self.final_on_release:
+                self._offline_task = asyncio.create_task(self._periodic_offline_correction())
             logger.info("ASR background processing loop started")
 
     async def stop_processing(self):
@@ -821,11 +824,27 @@ class ASREngine:
         finally:
             self._offline_busy = False
 
+    async def transcribe_segments(self, chunks):
+        """Final-only local fallback on VAD-bounded immutable audio chunks."""
+        def decode():
+            if not self._models_loaded:
+                raise RuntimeError("Local ASR model is unavailable")
+            model = self._sense_voice_model or self._offline_model
+            texts = []
+            for audio in chunks:
+                result = model.generate(input=audio.astype(np.float32) / 32768,
+                                        language=self.language, use_itn=True)
+                text = self._clean_sense_voice_text(result[0].get("text", "")) if result else ""
+                if not text.strip():
+                    raise RuntimeError("Local ASR returned an empty speech segment")
+                texts.append(text.strip())
+            return "\n".join(texts)
+        return await asyncio.to_thread(decode)
+
     async def finalize(self) -> str:
         """最终识别 — 使用完整离线模型"""
         if not self._audio_buffer:
             return self._finalized_text
-
         if not self._models_loaded:
             audio_len = len(self._audio_buffer) / self.sample_rate
             if audio_len < 0.5:

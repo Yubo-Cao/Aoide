@@ -2,6 +2,7 @@
 #define YUHUANG_SOCKET_H
 
 #include "yuhuang_engine.h"
+#include "yuhuang_json.h"
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <arpa/inet.h>
@@ -164,46 +165,7 @@ inline void BackendClient::receiveLoop() {
         // 安全地构造字符串（处理可能的 null 字节）
         std::string msg(reinterpret_cast<const char*>(buf.data()), msgLen);
 
-        // 改进的 JSON 字段提取 — 处理转义和引号内的特殊字符
-        auto extractField = [](const std::string &json,
-                               const std::string &field) -> std::string {
-            std::string key = "\"" + field + "\":";
-            size_t pos = json.find(key);
-            if (pos == std::string::npos) return "";
-            pos += key.size();
-            // 跳过空白
-            while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t'))
-                pos++;
-            if (pos >= json.size()) return "";
-
-            // 字符串值
-            if (json[pos] == '"') {
-                pos++;
-                std::string result;
-                while (pos < json.size()) {
-                    if (json[pos] == '\\' && pos + 1 < json.size()) {
-                        result += json[pos + 1]; // 简单转义
-                        pos += 2;
-                    } else if (json[pos] == '"') {
-                        break;
-                    } else {
-                        result += json[pos];
-                        pos++;
-                    }
-                }
-                return result;
-            }
-
-            // 数字或布尔值
-            size_t end = json.find_first_of(",}]}\n", pos);
-            if (end == std::string::npos) return json.substr(pos);
-            std::string val = json.substr(pos, end - pos);
-            // 去除两端空白
-            size_t s = val.find_first_not_of(" \t");
-            if (s == std::string::npos) return "";
-            size_t e = val.find_last_not_of(" \t");
-            return val.substr(s, e - s + 1);
-        };
+        auto extractField = jsonField;
 
         std::string type = extractField(msg, "type");
         std::string text = extractField(msg, "text");

@@ -29,6 +29,12 @@ inline void YuHuangState::updatePreedit(const std::string &text) {
     updatePreedit(std::vector<TextSegment>{{text, ""}});
 }
 
+inline void YuHuangState::showStatus(const std::string &text) {
+    updatePreedit(text);
+    // Status belongs only to the panel, never to a dictation candidate.
+    pendingText_.clear();
+}
+
 inline void YuHuangState::commitText(const std::string &text) {
     if (!ic_ || text.empty()) return;
 

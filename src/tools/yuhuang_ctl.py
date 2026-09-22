@@ -427,6 +427,23 @@ def cmd_gpu(args):
         print("  yuhuang-ctl gpu cpu       # Use CPU only")
 
 
+def cmd_last(args):
+    path = Path.home() / ".local/state/yuhuang/results/latest.txt"
+    if not path.exists():
+        print("尚无已保存的识别结果。")
+        return
+    text = path.read_text()
+    if args.copy:
+        subprocess.run(["wl-copy"], input=text, text=True, check=True, timeout=3)
+        print("已复制最近一次识别结果，可在目标输入框粘贴。")
+    else:
+        print(text)
+
+
+def cmd_dictionary(args):
+    print(Path.home() / ".config/yuhuang/dictionary.yaml")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="yuhuang-ctl",
@@ -444,6 +461,9 @@ def main():
     restart_parser.add_argument("-c", "--config", help="Config file path")
     subparsers.add_parser("toggle", help="Toggle listening pause/resume")
     subparsers.add_parser("reset", help="Reset current recognition state")
+    last_parser = subparsers.add_parser("last", help="Show or copy the last complete dictation")
+    last_parser.add_argument("--copy", action="store_true", help="Copy to Wayland clipboard")
+    subparsers.add_parser("dictionary", help="Show personal dictionary file location")
     mic_parser = subparsers.add_parser("mic", help="List or set audio input device")
     mic_parser.add_argument("device", nargs="?", default=None,
                             help="Device name to search and set (partial match)")
@@ -464,6 +484,8 @@ def main():
         "mic": cmd_mic,
         "switch": cmd_switch,
         "gpu": cmd_gpu,
+        "last": cmd_last,
+        "dictionary": cmd_dictionary,
     }
 
     if args.command in commands:

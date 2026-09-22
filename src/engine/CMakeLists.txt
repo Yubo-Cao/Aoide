@@ -1,4 +1,5 @@
 # 生成 yuhuang.so (不带 lib 前缀)
+find_package(nlohmann_json REQUIRED)
 add_library(yuhuang SHARED
     yuhuang_engine.cpp
     x11_keycheck.cpp
@@ -8,6 +9,7 @@ target_link_libraries(yuhuang PRIVATE
     Fcitx5::Core
     Fcitx5::Config
     Fcitx5::Utils
+    nlohmann_json::nlohmann_json
 )
 
 # ★ PTT 看门狗依赖 Xlib + XInput2（raw 事件监听物理键盘，

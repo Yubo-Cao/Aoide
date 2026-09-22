@@ -102,8 +102,8 @@ FCITX_CONFIGURATION(YuHuangConfig,
 
     fcitx::Option<int, fcitx::IntConstrain> panelMaxLines{
         this, "PanelMaxLines",
-        "Max lines kept in floating panel (oldest lines are dropped)",
-        6, fcitx::IntConstrain(1, 30)
+        "Max preview lines (beginning and end retained; middle folded)",
+        10, fcitx::IntConstrain(4, 30)
     };
 
     fcitx::Option<int, fcitx::IntConstrain> panelFontSize{
@@ -208,6 +208,7 @@ public:
 
     void updatePreedit(const std::string &text);
     void updatePreedit(const std::vector<TextSegment> &segments);
+    void showStatus(const std::string &text);
     void commitText(const std::string &text);
     void reset();
 
@@ -265,6 +266,7 @@ public:
     // fcitx5-configtool 里存的触发键、麦克风、LLM 设置全都读不回来。
     void reloadConfig() override {
         fcitx::readAsIni(config_, kConfigPath);
+        applyConfig();
     }
 
     auto factory() const { return &factory_; }
@@ -328,6 +330,10 @@ private:
     fcitx::KeyList triggerKeys_;
     PttMode triggerMode_ = PttMode::Hold;
     bool isRecording_ = false;
+    bool isFinalizing_ = false;
+    bool discardPendingResult_ = false;
+    bool triggerHeld_ = false;
+    fcitx::Key heldTrigger_;
     uint64_t recordingStartTime_ = 0;  // ★ PTT 按下的事件时间（打断去抖基准，同 keyEvent.time() 的 int 语义，用无符号避免回绕）
     uint64_t lastToggleTime_ = 0;  // ★ Toggle 模式去抖：上次 toggle 动作时间（防键盘自动重复 / Free3 脉冲连发误触发）
 

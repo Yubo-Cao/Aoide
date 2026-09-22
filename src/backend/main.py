@@ -24,6 +24,8 @@ from backend.llm_optimizer import LLMOptimizer
 from backend.audio_capture import AudioCapture
 from backend.unix_server import UnixSocketServer
 from backend.pipeline import PTTPipeline
+from backend.speech_frontend import SpeechFrontend
+from backend.cloud_asr import CloudRecognizer
 
 logger = logging.getLogger("yuhuang")
 
@@ -161,6 +163,15 @@ def main():
     asr_config = config.get("asr", {})
     audio_config = config.get("audio", {})
     llm_config = config.get("llm", {})
+    release_only = config.get("pipeline", {}).get("commit_on_release", True)
+    frontend = SpeechFrontend(denoise=config.get("audio", {}).get("noise_suppression", True)) if release_only else None
+    cloud_config = config.get("cloud_asr", {})
+    cloud_asr = CloudRecognizer(
+        model=cloud_config.get("model", "gpt-transcribe"),
+        api_key=cloud_config.get("api_key", "env:YUHUANG_OPENAI_API_KEY"),
+        mode=cloud_config.get("mode", "file"),
+        prompt=cloud_config.get("prompt", ""),
+    ) if cloud_config.get("enabled", False) else None
 
     # ASR engine
     logger.info("Loading ASR models...")
@@ -177,6 +188,7 @@ def main():
             sample_rate=audio_config.get("sample_rate", 16000),
             intermediate_interval=asr_config.get("intermediate_interval", 0.3),
             device=asr_config.get("device", "cuda"),
+            final_on_release=release_only,
         )
         logger.info("ASR models loaded successfully")
     except Exception as e:
@@ -212,11 +224,22 @@ def main():
     server = UnixSocketServer(socket_path)
 
     # ---- PTT 流式管道 ----
-    _pipeline = PTTPipeline(server, llm_optimizer)
+    from .result_store import ResultStore
+    _pipeline = PTTPipeline(server, llm_optimizer, commit_on_release=release_only,
+                            result_store=ResultStore())
+    _finishing = False
 
     # ---- Callbacks ----
 
     async def on_audio_data(pcm_data: bytes):
+        if frontend:
+            try:
+                pcm_data = frontend.process(pcm_data)
+            except ValueError as exc:
+                audio_capture.stop_listening()
+                logger.warning("Recording stopped: %s", exc)
+                await server.broadcast({"type": "error", "text": "单次录音已达五分钟，请松键提交。"})
+                return
         if asr_engine:
             await asr_engine.process_audio(pcm_data)
 
@@ -239,11 +262,18 @@ def main():
         # ★ 防重入：已在监听时的重复 start（典型场景：合成器
         # 吞掉松键事件后用户补按触发键救援）绝不能 reset 洗掉
         # 进行中的会话，直接忽略
-        if audio_capture.is_listening:
+        if audio_capture.is_listening or _finishing:
             logger.warning(
                 "start_listening ignored: already listening "
                 "(duplicate PTT press, release event likely lost)")
             return
+        try:
+            await audio_capture.follow_default_device()
+        except Exception as exc:
+            logger.error("Cannot follow default microphone: %s", exc)
+            return
+        if frontend:
+            frontend.reset()
         audio_capture.start_listening()
         _pipeline.reset()
         if asr_engine:
@@ -259,7 +289,61 @@ def main():
     async def _stop_impl(interrupt: bool):
         """PTT 停止公共实现。interrupt=True 为打断（只润色剩余提交），
         False 为松开（全文终审删除重推）。"""
+        nonlocal _finishing
+        if _finishing:
+            return
+        _finishing = True
+        try:
+            await _finish_impl(interrupt)
+        finally:
+            _finishing = False
+            await server.broadcast({"type": "finalized"})
+
+    async def _finish_impl(interrupt: bool):
         audio_capture.stop_listening()
+        await audio_capture.drain_pending()
+        if audio_capture.session_peak == 0:
+            logger.warning("No microphone signal during PTT (all samples zero or missing)")
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "notify-send", "语皇：没有收到麦克风声音",
+                    "请检查默认麦克风的连接、电源和静音状态，或在系统设置中切换输入设备。")
+                await asyncio.wait_for(proc.wait(), timeout=2)
+            except (OSError, asyncio.TimeoutError):
+                logger.warning("Could not display microphone notification")
+        if release_only:
+            if asr_engine:
+                await asr_engine.stop_processing()
+            if interrupt:
+                await _pipeline.finalize_interrupt()
+                return
+            # Our public-fixture comparison found that APM suppression can
+            # damage proper nouns for GPT Transcribe. VAD uses the clean copy;
+            # recognition receives the original samples at the same boundaries.
+            chunks = frontend.finish(use_raw=True)
+            logger.info("Final-only speech: %d segment(s), %.2fs of %.2fs recording; AEC off",
+                        len(chunks), sum(len(c) for c in chunks) / 16000, frontend.samples / 16000)
+            if not chunks:
+                _pipeline.reset()
+                await server.broadcast({"type": "reset"})
+                return
+            text = ""
+            if cloud_asr:
+                try:
+                    text = await asyncio.wait_for(cloud_asr.recognize(chunks), timeout=120)
+                    logger.info("Cloud ASR completed: %s, %d chars", cloud_asr.model, len(text))
+                except Exception as exc:
+                    logger.warning("Cloud ASR failed (%s); using local recognition", type(exc).__name__)
+            if not text and asr_engine:
+                try:
+                    text = await asr_engine.transcribe_segments(chunks)
+                except Exception as exc:
+                    logger.error("Local final recognition failed: %s", type(exc).__name__)
+            if text:
+                await _pipeline.on_offline_correction(text, 1)
+            # If both recognizers failed, retain the local draft instead of deleting it.
+            await _pipeline.finalize()
+            return
         # ★ 等待最后一次离线纠正完成（小步轮询，完成即走，不固定睡 0.5s）
         if asr_engine:
             for _ in range(12):  # 最多 0.6s
@@ -306,10 +390,11 @@ def main():
         llm_cfg = cmd.get("llm", {})
 
         # Only create/update LLM optimizer when explicitly enabled
-        llm_enabled = llm_cfg.get("enabled", False)
+        llm_enabled = llm_cfg.get("enabled", llm_optimizer is not None)
         if not llm_enabled and llm_optimizer:
             # LLM was disabled → discard optimizer
             logger.info("LLM optimization disabled by fcitx5 config")
+            await llm_optimizer.close()
             llm_optimizer = None
         elif llm_enabled and not llm_optimizer:
             logger.info("Creating LLM optimizer from fcitx5 config")
@@ -341,8 +426,8 @@ def main():
         logger.info(f"Pipeline LLM enabled: {llm_optimizer is not None} (green zone {'on' if llm_optimizer else 'off'})")
 
         # Hot-swap audio device
-        new_device = cmd.get("audio_device", "")
         old_device = audio_capture.device or ""
+        new_device = cmd.get("audio_device", old_device)
         if new_device != old_device:
             audio_capture.set_device(new_device if new_device else None)
             logger.info(f"Audio device changed: '{old_device or 'default'}' → '{new_device or 'default'}'")
@@ -433,6 +518,12 @@ def main():
         logger.info("Shutting down...")
         _pipeline.stop_emergency_timer()
         await audio_capture.stop()
+        if llm_optimizer:
+            await llm_optimizer.close()
+        if cloud_asr:
+            await cloud_asr.close()
+        if frontend:
+            frontend.close()
         server.stop()
         if asr_engine:
             await asr_engine.stop_processing()

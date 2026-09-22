@@ -173,6 +173,8 @@ bool YuHuangEngine::tryReconnect() {
     backend_->disconnect();
     if (!backend_->connect()) return false;
     backend_->startReceiveLoop();
+    isFinalizing_ = false;
+    isRecording_ = false;
     sendConfigToBackend();
     std::cout << "[YuHuang] Backend reconnected" << std::endl;
     return true;
@@ -189,7 +191,6 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
     instance->inputContextManager().registerProperty("yuhuangState", &factory_);
 
     reloadConfig();
-    applyConfig();
 
     backend_ = std::make_unique<BackendClient>(config_.backendSocket.value());
 
@@ -237,9 +238,18 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
             std::cout << "[YuHuang] CB exec on main: type=" << type
                       << " text=" << text.substr(0, 40) << std::endl;
 
+            if (type == "finalized") {
+                isFinalizing_ = false;
+                return;
+            }
             // ★ interrupt_done 不依赖 state：放行被暂扣的打断按键是引擎级操作
             if (type == "interrupt_done") {
+                isFinalizing_ = false;
                 releasePendingKey();
+                return;
+            }
+            if (discardPendingResult_ && (type == "replace" || type == "commit" ||
+                    type == "preedit" || type == "interrupt_commit")) {
                 return;
             }
 
@@ -255,40 +265,7 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
                       << (state->inputContext() ? state->inputContext()->program() : "?")
                       << std::endl;
 
-            // 简易 JSON 字段提取（无三方库依赖）
-            auto extractField = [](const std::string &json,
-                                   const std::string &field) -> std::string {
-                std::string key = "\"" + field + "\":";
-                size_t pos = json.find(key);
-                if (pos == std::string::npos) return "";
-                pos += key.size();
-                while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t'))
-                    pos++;
-                if (pos >= json.size()) return "";
-                if (json[pos] == '"') {
-                    pos++;
-                    std::string result;
-                    while (pos < json.size()) {
-                        if (json[pos] == '\\' && pos + 1 < json.size()) {
-                            result += json[pos + 1];
-                            pos += 2;
-                        } else if (json[pos] == '"') {
-                            break;
-                        } else {
-                            result += json[pos];
-                            pos++;
-                        }
-                    }
-                    return result;
-                }
-                size_t end = json.find_first_of(",}]}\n", pos);
-                if (end == std::string::npos) return json.substr(pos);
-                std::string val = json.substr(pos, end - pos);
-                size_t s = val.find_first_not_of(" \t");
-                if (s == std::string::npos) return "";
-                size_t e = val.find_last_not_of(" \t");
-                return val.substr(s, e - s + 1);
-            };
+            auto extractField = jsonField;
 
             if (type == "preedit") {
                 // 分段预编辑（三色渲染）— 从 flat JSON 提取各颜色段
@@ -307,7 +284,11 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
                 std::cout << "[YuHuang] preedit: segments=" << segments.size()
                           << " ic=" << (state->inputContext() ? "OK" : "NULL")
                           << std::endl;
-                state->updatePreedit(segments);
+                if (segments.empty() && isRecording_) {
+                    state->showStatus("正在聆听…");
+                } else {
+                    state->updatePreedit(segments);
+                }
             } else if (type == "intermediate") {
                 state->updatePreedit(text);
             } else if (type == "final") {
@@ -338,7 +319,13 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
                           << " preedit_channel=" << state->usePreeditChannel()
                           << std::endl;
             } else if (type == "reset") {
-                state->resetSmart();
+                // The backend acknowledges a new recording with reset. Keep
+                // the immediate listening indicator until the first draft.
+                if (isRecording_) {
+                    state->showStatus("正在聆听…");
+                } else {
+                    state->resetSmart();
+                }
             } else if (type == "error") {
                 state->updatePreedit("[! " + text + "]");
             }
@@ -372,12 +359,41 @@ void YuHuangEngine::onGlobalKey(fcitx::KeyEvent &keyEvent) {
     const fcitx::Key &key = keyEvent.key();
     bool isRelease = keyEvent.isRelease();
 
+    // Release order changes modifiers and may turn Q into q. Track the
+    // physical key, and finish as soon as any required chord key is released.
+    if (triggerMode_ == PttMode::Hold && triggerHeld_) {
+        const auto raw = keyEvent.rawKey();
+        auto lower = [](uint32_t sym) { return sym >= 'A' && sym <= 'Z' ? sym + ('a' - 'A') : sym; };
+        const bool mainKey = (heldTrigger_.code() && raw.code())
+            ? heldTrigger_.code() == raw.code()
+            : lower(heldTrigger_.sym()) == lower(raw.sym());
+        if (isRelease && mainKey) {
+            triggerHeld_ = false;
+            stopListening();
+            keyEvent.filterAndAccept();
+            return;
+        }
+        if (isRelease && key.isModifier() &&
+                (fcitx::Key::keySymToStates(key.sym()) & heldTrigger_.states())) {
+            stopListening();
+            return; // Let the application see its modifier release.
+        }
+        if (!isRelease && mainKey) {
+            keyEvent.filterAndAccept(); // Auto-repeat must never start a new session.
+            return;
+        }
+    }
+
     // ★ 按键驱动的重连：定时器最多 2s 才轮一次，这里让"断连后立刻按键"
     // 也能马上恢复，不必等下一个 tick。
     tryReconnect();
 
     if (isTriggerKey(key)) {
         keyEvent.filterAndAccept();
+        if (triggerMode_ == PttMode::Hold && !isRelease) {
+            triggerHeld_ = true;
+            heldTrigger_ = keyEvent.rawKey();
+        }
         if (triggerMode_ == PttMode::Toggle) {
             // ★ Toggle 模式：按一下开始、再按一下结束，release 一律忽略。
             // 适用 Free3 等脉冲式蓝牙小键盘（press 后 ~62ms 伪造 release，
@@ -460,16 +476,26 @@ void YuHuangEngine::onGlobalKey(fcitx::KeyEvent &keyEvent) {
 }
 
 void YuHuangEngine::onFocusOut(fcitx::InputContextEvent &event) {
-    FCITX_UNUSED(event);
+    // Fcitx has many input contexts; another window losing focus is unrelated.
+    if (event.inputContext() != recordingIc_.get()) return;
+    triggerHeld_ = false;
     if (isRecording_) {
         logPtt("PTT: focus lost while recording -> interrupt");
         interruptListening();  // 焦点打断：无暂扣按键，只润色剩余收尾
+    } else if (isFinalizing_) {
+        discardPendingResult_ = true;
+        if (auto *state = currentState()) state->resetSmart();
+        logPtt("PTT: focus lost during final recognition -> discard pending output");
     }
 }
 
 // ---- ★ PTT 生命周期 ----
 
 void YuHuangEngine::startListening() {
+    if (isFinalizing_) {
+        logPtt("PTT: waiting for the previous final result; release and press again");
+        return;
+    }
     auto *ic = instance_->mostRecentInputContext();
     if (!ic) {
         logPtt("PTT: no focused input context, ignore trigger");
@@ -478,7 +504,16 @@ void YuHuangEngine::startListening() {
     // ★ 钉住本次录音的目标 IC：之后后端的所有 preedit/commit/replace
     // 都打到这个窗口，即使录音中用户用鼠标把焦点点走
     recordingIc_ = ic->watch();
+    discardPendingResult_ = false;
+    auto *state = ic->propertyFor(&factory_);
+    state->resetSmart();
+    if (!tryReconnect()) {
+        state->showStatus("语音服务未连接，请稍后重试");
+        return;
+    }
     isRecording_ = true;
+    // Paint in the key handler, before any microphone routing or ASR work.
+    state->showStatus("正在聆听…");
     logPtt(std::string("PTT: trigger pressed -> start listening on ")
            + ic->program());
     if (backend_ && backend_->isConnected()) {
@@ -497,6 +532,10 @@ void YuHuangEngine::stopListening() {
     x11WatchKeyEnd();  // 退订 raw 事件，防止在连接上无限堆积
     logPtt("PTT: stop listening (release)");
     if (backend_ && backend_->isConnected()) {
+        isFinalizing_ = true;
+        if (auto *state = currentState(); state && state->pendingText().empty()) {
+            state->showStatus("正在识别…");
+        }
         backend_->sendCommand("{\"type\":\"stop_listening\"}");
     }
 }
@@ -509,6 +548,7 @@ void YuHuangEngine::interruptListening() {
     x11WatchKeyEnd();
     logPtt("PTT: interrupt -> finalize remaining");
     if (backend_ && backend_->isConnected()) {
+        isFinalizing_ = true;
         backend_->sendCommand("{\"type\":\"interrupt\"}");
     }
     // isRecording_=false 后，该键的 release 及后续按键穿透给拼音；
@@ -584,11 +624,8 @@ void YuHuangEngine::stopPttWatchdog() {
 YuHuangState *YuHuangEngine::currentState() {
     // ★ 优先使用 startListening 钉住的 IC，不跟随当前焦点——否则录音中
     // 用户用鼠标点了别的窗口，后端收尾的 commit/replace 会落到新窗口。
-    // 钉住的 IC 已销毁（窗口关闭）或未录音过时，回退到当前焦点 IC。
+    // 原窗口销毁后丢弃结果，不能把延迟返回的文字写入另一个窗口。
     auto *ic = recordingIc_.get();
-    if (!ic) {
-        ic = instance_->mostRecentInputContext();
-    }
     if (!ic) return nullptr;
     return ic->propertyFor(&factory_);
 }

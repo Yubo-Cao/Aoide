@@ -5,6 +5,7 @@
 #include <fcitx/candidatelist.h>
 #include <fcitx/text.h>
 #include <memory>
+#include <algorithm>
 #include <string>
 #include <utility>
 #include <vector>
@@ -63,8 +64,7 @@ inline fcitx::TextFormatFlags styleToFlags(const std::string &style) {
 
 // 按显示列宽折行：ASCII 与拉丁字母算 1 列，汉字/全角/emoji 算 2 列。像素级
 // 宽度取决于字体，这里只求近似，够把窗口宽度约束住即可。
-// 行数超上限时丢掉开头的行（那部分马上就要上屏了，正在说的才要紧），首行前
-// 加省略号提示上面还有内容。
+// 只折叠显示：保留开头与最新内容，并明确说明中间内容仍然保留。
 inline fcitx::Text buildWrappedText(const std::vector<TextSegment> &segments,
                                     int maxColumns, int maxLines) {
     struct Piece {
@@ -90,6 +90,15 @@ inline fcitx::Text buildWrappedText(const std::vector<TextSegment> &segments,
             else if (c >= 0xC0) { len = 2; width = 1; }  // 带音调的拉丁字母等
             if (i + len > s.size()) len = s.size() - i;  // 截断的序列，整段吃掉
 
+            if (c == '\n') {
+                if (!cur.empty()) lines.back().push_back({cur, flags});
+                cur.clear();
+                lines.emplace_back();
+                col = 0;
+                ++i;
+                continue;
+            }
+
             if (col + width > maxColumns && col > 0) {
                 if (!cur.empty()) {
                     lines.back().push_back({cur, flags});
@@ -106,9 +115,15 @@ inline fcitx::Text buildWrappedText(const std::vector<TextSegment> &segments,
     }
 
     if (maxLines > 0 && static_cast<int>(lines.size()) > maxLines) {
-        lines.erase(lines.begin(), lines.end() - maxLines);
-        lines.front().insert(lines.front().begin(),
-                             {"…", fcitx::TextFormatFlag::NoFlag});
+        maxLines = std::max(4, maxLines);
+        if (static_cast<int>(lines.size()) > maxLines) {
+            const int head = std::min(3, maxLines - 2);
+            const int tail = maxLines - head - 1;
+            const int folded = static_cast<int>(lines.size()) - head - tail;
+            lines.erase(lines.begin() + head, lines.end() - tail);
+            lines.insert(lines.begin() + head,
+                {{"（中间 " + std::to_string(folded) + " 行已保留）", fcitx::TextFormatFlag::NoFlag}});
+        }
     }
 
     fcitx::Text text;

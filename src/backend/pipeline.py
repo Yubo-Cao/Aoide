@@ -726,8 +726,10 @@ class PTTPipeline:
     #   遗忘锚点，LLM 孤立看"首充"完全合法，无理由改写）
     BACKGROUND_CONTEXT_CHARS = 500  # 前文参考滑窗长度（≈最近 2 分钟定稿）
 
-    def __init__(self, server, llm_optimizer=None):
+    def __init__(self, server, llm_optimizer=None, commit_on_release=False, result_store=None):
         self.server = server
+        self.result_store = result_store
+        self.commit_on_release = commit_on_release
         self.llm_optimizer = llm_optimizer
         self.buffer = CandidateBuffer()
         self.buffer._notify_commit = self._on_commit
@@ -766,6 +768,8 @@ class PTTPipeline:
         与 finalize 的区别：commit_now 不做 LLM 润色，不重置 buffer 状态，
         只是把当前 buffer 内容推上去并清空。适用于用户主动按回车确认的场景。
         """
+        if self.commit_on_release:
+            return
         full = self.buffer.full_text
         if not full or not full.strip():
             # 空 buffer：发 reset 清掉候选框
@@ -781,7 +785,14 @@ class PTTPipeline:
     async def on_intermediate(self, text: str):
         if not text:
             return
-        self.buffer.update_streaming(text)
+        if self._finalizing:
+            return
+        if self.commit_on_release:
+            self.buffer._chars = deque(text)
+            self.buffer._green_end = 0
+            self.buffer._yellow_end = 0
+        else:
+            self.buffer.update_streaming(text)
         await self._update_display()
 
     async def on_offline_correction(self, text: str, generation: int):
@@ -790,7 +801,12 @@ class PTTPipeline:
         # ★ finalize 正在收尾：不再接受离线纠正，避免与终审快照竞态重复提交
         if self._finalizing:
             return
-        self.buffer.apply_offline_correction(text)
+        if self.commit_on_release:
+            self.buffer._chars = deque(text)
+            self.buffer._green_end = 0
+            self.buffer._yellow_end = len(text)
+        else:
+            self.buffer.apply_offline_correction(text)
         self._prev_offline_text = text
         await self._update_display()
 
@@ -1012,16 +1028,30 @@ class PTTPipeline:
                 # ★ 有改进才需要删除重推（真上屏通道）；无改进 delete_chars=0
                 changed = (refined_full != full_text.strip())
 
+                # Applications without client preedit/SurroundingText cannot
+                # replace previously committed text. If nothing was committed,
+                # however, the complete refined result is safe to insert.
+                fallback_text = remaining.strip()
+                if not session_text:
+                    fallback_text = refined_full
+                elif refined_full.startswith(session_text):
+                    fallback_text = refined_full[len(session_text):].strip()
+
                 # ★ 统一发 replace，前端按应用能力自选通道：
                 #   - 假上屏通道(Preedit=1)：commit text（全文，替换假上屏）
                 #   - 真上屏通道+支持删除+有改进：deleteSurrounding + commit text
                 #   - 真上屏通道其他情况：commit fallback_text（只上屏剩余）
+                if self.result_store:
+                    try:
+                        self.result_store.save(full_text, refined_full)
+                    except OSError as exc:
+                        logger.error("Cannot save recovery text: %s", type(exc).__name__)
                 if self.server:
                     await self.server.broadcast({
                         "type": "replace",
                         "delete_chars": len(session_text) if changed else 0,
                         "text": refined_full,
-                        "fallback_text": remaining.strip(),
+                        "fallback_text": fallback_text,
                     })
                 logger.info(
                     f"PTT finalize: replace "
@@ -1047,6 +1077,13 @@ class PTTPipeline:
         ★ interrupt_done 必须在 finally 里发：无论润色成败都放行被前端
         暂扣的打断按键，否则该键会被永久吞掉。
         """
+        if self.commit_on_release:
+            # Focus moved or the user typed: never insert into another app.
+            self.reset()
+            if self.server:
+                await self.server.broadcast({"type": "reset"})
+                await self.server.broadcast({"type": "interrupt_done"})
+            return
         self._finalizing = True
         try:
             # 取消在途的绿区润色
@@ -1096,6 +1133,16 @@ class PTTPipeline:
         才回退原文（旧版 gather 整体超时，98 字全部原文上屏，
         "物邦图/LLOM/泛ASR" 就是这么漏过去的）。
         """
+        if self.commit_on_release:
+            # Preserve sentence context. The legacy 35-character parallel
+            # rewrites frequently split English terms and Chinese clauses.
+            try:
+                result = await asyncio.wait_for(
+                    self.llm_optimizer.optimize(raw, urgent=True), timeout=25)
+                return result or raw
+            except Exception as exc:
+                logger.warning("Final refinement failed (%s); keeping transcript", type(exc).__name__)
+                return raw
         chunks = self._split_final_chunks(raw)
         # ★ 跨段衔接：每段都带上文（已定稿尾部 / 前一 chunk 原文尾部）
         # 和下文（后一 chunk 头部），并行请求互不等待
@@ -1203,6 +1250,8 @@ class PTTPipeline:
                 pass  # 无 event loop（关机时可能发生）
 
     def start_emergency_timer(self):
+        if self.commit_on_release:
+            return
         async def tick():
             while True:
                 try:

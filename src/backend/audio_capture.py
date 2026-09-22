@@ -1,6 +1,10 @@
 """Audio capture module — sounddevice + Push-to-Talk (no VAD threshold needed)"""
 import asyncio
+import json
 import logging
+import os
+import shutil
+import subprocess
 import time
 from typing import Callable, Optional
 import numpy as np
@@ -48,6 +52,9 @@ class AudioCapture:
 
         # 音频队列 (audio thread → event loop)
         self._audio_queue = asyncio.Queue(maxsize=200)
+        self._loop = None
+        self._session = 0
+        self.session_peak = 0
 
         # ★ 回调频率监控
         self._callback_times = []  # 最近 _CALLBACK_RATE_WINDOW 秒内的回调时间戳
@@ -111,10 +118,58 @@ class AudioCapture:
         audio = indata.copy()
         pcm_bytes = audio.flatten().astype(np.int16).tobytes()
 
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(self._enqueue_audio, self._session, pcm_bytes)
+
+    def _enqueue_audio(self, session, pcm_bytes):
+        if session != self._session:
+            return
+        samples = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.int32)
+        if samples.size:
+            self.session_peak = max(self.session_peak, int(np.abs(samples).max()))
         try:
             self._audio_queue.put_nowait(pcm_bytes)
         except asyncio.QueueFull:
             logger.warning("Audio queue full — dropping frame")
+
+    async def drain_pending(self):
+        """Deliver captured tail frames before ASR finalization."""
+        await asyncio.sleep(0)  # accept callbacks already scheduled by PortAudio
+        await self._audio_queue.join()
+
+    async def follow_default_device(self):
+        """Route only this process's stream to the current desktop default.
+
+        PipeWire/PulseAudio can restore an old per-application microphone even
+        when sounddevice's device=None is used. Recheck at each PTT press.
+        """
+        if self.device or not shutil.which("pactl"):
+            return
+        await asyncio.to_thread(self._follow_pulse_default)
+
+    def _follow_pulse_default(self):
+        def pactl(*args):
+            return subprocess.run(
+                ["pactl", *args], check=True, capture_output=True,
+                text=True, timeout=2).stdout
+
+        target = pactl("get-default-source").strip()
+        if not target:
+            raise RuntimeError("The desktop has no default microphone")
+        clients = json.loads(pactl("-f", "json", "list", "clients"))
+        owned = {str(c["index"]) for c in clients
+                 if str(c.get("properties", {}).get("application.process.id")) == str(os.getpid())}
+        sources = json.loads(pactl("-f", "json", "list", "sources"))
+        target_id = next((str(s["index"]) for s in sources if s["name"] == target), None)
+        streams = json.loads(pactl("-f", "json", "list", "source-outputs"))
+        ours = [s for s in streams if str(s.get("client")) in owned
+                or str(s.get("properties", {}).get("application.process.id")) == str(os.getpid())]
+        if not ours or target_id is None:
+            raise RuntimeError("Cannot locate the capture stream or default microphone")
+        for stream in ours:
+            if str(stream.get("source")) != target_id:
+                pactl("move-source-output", str(stream["index"]), target)
+                logger.info("Microphone now follows system default: %s", target)
 
     # ── 底层流管理 ──────────────────────────────────
 
@@ -127,9 +182,11 @@ class AudioCapture:
             if self.device:
                 all_devices = sd.query_devices()
                 for i, dev in enumerate(all_devices):
-                    if self.device in dev["name"]:
+                    if self.device in dev["name"] and dev["max_input_channels"] > 0:
                         device_id = i
                         break
+                if device_id is None:
+                    raise ValueError(f"Configured microphone not found: {self.device}")
 
             self._stream = sd.InputStream(
                 samplerate=self.sample_rate,
@@ -140,7 +197,7 @@ class AudioCapture:
                 callback=self._sounddevice_callback,
             )
             self._stream.start()
-            logger.info(f"🎤 Audio stream opened (device: {device_id or 'default'})")
+            logger.info(f"🎤 Audio stream opened (device: {device_id if device_id is not None else 'default'})")
             return True
         except Exception as e:
             self._stream = None
@@ -212,6 +269,7 @@ class AudioCapture:
             while not self._audio_queue.empty():
                 try:
                     self._audio_queue.get_nowait()
+                    self._audio_queue.task_done()
                     drained += 1
                 except asyncio.QueueEmpty:
                     break
@@ -252,6 +310,7 @@ class AudioCapture:
     async def start(self, audio_callback: Callable):
         """启动音频捕获 + 后台转发循环 + 断线重连看门狗"""
         self._audio_callback = audio_callback
+        self._loop = asyncio.get_running_loop()
         self._running = True
 
         # 列出现有设备供诊断
@@ -269,6 +328,7 @@ class AudioCapture:
         if await self._open_stream():
             logger.info("🎤 Hold trigger key to speak, release to commit")
         else:
+            self._stream_failed_flag = True
             logger.warning(
                 "No audio input device available at startup — "
                 "will retry in background. "
@@ -300,6 +360,7 @@ class AudioCapture:
         while not self._audio_queue.empty():
             try:
                 self._audio_queue.get_nowait()
+                self._audio_queue.task_done()
             except asyncio.QueueEmpty:
                 break
         # 重置频率监控
@@ -313,6 +374,8 @@ class AudioCapture:
 
     def start_listening(self):
         """按住触发键 → 开始接收音频"""
+        self._session += 1
+        self.session_peak = 0
         self._listening = True
         logger.info("🎤 PTT: START")
 
@@ -344,14 +407,13 @@ class AudioCapture:
             except (RuntimeError, asyncio.CancelledError):
                 break
 
-            if not self._listening:
-                continue
-
-            if self._audio_callback:
-                try:
+            try:
+                if self._audio_callback:
                     await self._audio_callback(pcm_bytes)
-                except Exception as e:
-                    logger.error(f"Audio callback error: {e}")
+            except Exception as e:
+                logger.error(f"Audio callback error: {e}")
+            finally:
+                self._audio_queue.task_done()
 
     # ── 属性 ─────────────────────────────────────────
 
