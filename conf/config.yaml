@@ -137,6 +137,20 @@ cloud_asr:
   stream_cooldown: 600                # pause length (s); auth errors stop until restart
   fallback_batch: true                # realtime final failed -> same vendor batch
   local_fallback: true                # all cloud paths failed -> local Qwen3/SenseVoice
+  # Noise suppression for the audio sent to the cloud (stream and batch).
+  # Local VAD/drafts always use their own WebRTC copy. Measured 2026-09-22 on
+  # noisy public fixtures: no setting clearly beat raw for Scribe; full RNNoise
+  # dropped a whole English passage in Scribe Realtime, and both RNNoise modes
+  # changed a clean-speech word. webrtc/moderate never hurt Scribe Realtime.
+  denoise: none                       # none | webrtc | rnnoise
+  denoise_options:
+    webrtc_level: moderate            # low | moderate | high | very_high
+    high_pass: true
+    webrtc_agc: false                 # AGC2 adaptive digital gain for quiet/distant speech
+    rnnoise_attenuation_limit_db: 12  # cap noise reduction (wet/dry blend); 0 = unlimited
+    rnnoise_vad_threshold: 0          # 0 = no gate; e.g. 0.6 mutes frames below that voice probability
+    rnnoise_vad_grace_ms: 200         # keep the gate open this long after voice
+    rnnoise_vad_retro_ms: 0           # also open this long before voice (adds equal latency)
   elevenlabs:
     api_key: env:YUHUANG_ELEVENLABS_API_KEY
     model: scribe_v2

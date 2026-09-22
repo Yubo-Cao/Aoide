@@ -26,6 +26,7 @@ from backend.unix_server import UnixSocketServer
 from backend.pipeline import PTTPipeline
 from backend.speech_frontend import SpeechFrontend
 from backend.cloud_asr import CloudASR
+from backend.audio_denoise import CloudDenoiser
 
 logger = logging.getLogger("yuhuang")
 
@@ -167,9 +168,18 @@ def main():
     frontend = SpeechFrontend(denoise=config.get("audio", {}).get("noise_suppression", True)) if release_only else None
     cloud_config = config.get("cloud_asr", {})
     cloud_asr = CloudASR(cloud_config) if cloud_config.get("enabled", False) and release_only else None
+    cloud_denoiser = None
     if cloud_asr:
-        logger.info("Cloud ASR: provider=%s final=%s draft=%s", cloud_asr.provider,
-                    cloud_asr.model, "cloud" if cloud_asr.cloud_draft else "local")
+        try:
+            cloud_denoiser = CloudDenoiser(cloud_config.get("denoise", "none"),
+                                           cloud_config.get("denoise_options") or {})
+        except Exception as exc:
+            logger.error("Cloud denoiser unavailable (%s: %s); sending raw audio",
+                         type(exc).__name__, exc)
+            cloud_denoiser = CloudDenoiser("none")
+        logger.info("Cloud ASR: provider=%s final=%s draft=%s denoise=%s", cloud_asr.provider,
+                    cloud_asr.model, "cloud" if cloud_asr.cloud_draft else "local",
+                    cloud_denoiser.mode)
 
     # ASR engine
     logger.info("Loading ASR models...")
@@ -261,17 +271,27 @@ def main():
         if session is not None:
             await session.abort()
 
-    async def on_audio_data(pcm_data: bytes):
+    def _to_cloud(pcm):
+        """Feed the cloud path (optional denoise); never blocks on the network."""
+        if not pcm:
+            return
+        if cloud_denoiser is not None and cloud_denoiser.enabled and frontend:
+            frontend.add_cloud(pcm)
         if _stream is not None:
-            _stream.feed(pcm_data)  # raw samples; non-blocking enqueue
+            _stream.feed(pcm)  # non-blocking enqueue
+
+    async def on_audio_data(pcm_data: bytes):
+        raw = pcm_data
         if frontend:
             try:
-                pcm_data = frontend.process(pcm_data)
+                pcm_data = frontend.process(raw)
             except ValueError as exc:
                 audio_capture.stop_listening()
                 logger.warning("Recording stopped: %s", exc)
                 await server.broadcast({"type": "error", "text": "单次录音已达五分钟，请松键提交。"})
                 return
+        if cloud_asr:
+            _to_cloud(cloud_denoiser.process(raw))
         if asr_engine:
             await asr_engine.process_audio(pcm_data)
 
@@ -307,6 +327,8 @@ def main():
             return
         if frontend:
             frontend.reset()
+        if cloud_denoiser is not None:
+            cloud_denoiser.reset()
         audio_capture.start_listening()
         _pipeline.reset()
         if asr_engine:
@@ -356,8 +378,13 @@ def main():
                 return
             # Our public-fixture comparison found that APM suppression can
             # damage proper nouns for GPT Transcribe. VAD uses the clean copy;
-            # recognition receives the original samples at the same boundaries.
+            # recognition receives the original samples at the same boundaries,
+            # or the cloud_asr.denoise copy (same timeline) when configured.
+            if cloud_asr:
+                _to_cloud(cloud_denoiser.flush())
             chunks = frontend.finish(use_raw=True)
+            cloud_chunks = (frontend.finish(source="cloud")
+                            if cloud_denoiser is not None and cloud_denoiser.enabled else chunks)
             logger.info("Final-only speech: %d segment(s), %.2fs of %.2fs recording; AEC off",
                         len(chunks), sum(len(c) for c in chunks) / 16000, frontend.samples / 16000)
             if not chunks:
@@ -368,7 +395,7 @@ def main():
             text = ""
             if cloud_asr:
                 try:
-                    text = await cloud_asr.final(chunks, _stream)
+                    text = await cloud_asr.final(cloud_chunks, _stream)
                     logger.info("Cloud ASR completed: %s, %d chars", cloud_asr.model, len(text))
                 except Exception as exc:
                     logger.warning("Cloud ASR failed (%s); using local recognition", type(exc).__name__)
@@ -566,6 +593,8 @@ def main():
             await cloud_asr.close()
         if frontend:
             frontend.close()
+        if cloud_denoiser is not None:
+            cloud_denoiser.close()
         server.stop()
         if asr_engine:
             await asr_engine.stop_processing()

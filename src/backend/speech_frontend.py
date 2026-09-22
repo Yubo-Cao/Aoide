@@ -5,12 +5,14 @@ follow Kylian's speech-gate.ts, adapted from 8 kHz telephony to 16 kHz PCM.
 VAD selects ASR segments; it never commits text or ends push-to-talk.
 """
 import ctypes
+import logging
 from pathlib import Path
 
 import numpy as np
 
 
 RATE = 16000
+logger = logging.getLogger("yuhuang.frontend")
 
 
 class Denoiser:
@@ -73,6 +75,7 @@ class SpeechFrontend:
         self.vad_pending = np.empty(0, np.int16)
         self.parts = []
         self.raw_parts = []
+        self.cloud_parts = []  # optional cloud-denoised copy, sample-aligned with raw
         self.probabilities = []
         self.samples = 0
         self.finished = False
@@ -93,6 +96,11 @@ class SpeechFrontend:
         self._accept(cleaned)
         return cleaned.tobytes()
 
+    def add_cloud(self, pcm):
+        """Record the cloud-denoiser output (same timeline as the raw samples)."""
+        if pcm:
+            self.cloud_parts.append(np.frombuffer(pcm, dtype=np.int16).copy())
+
     def _accept(self, cleaned):
         self.parts.append(cleaned)
         self.samples += len(cleaned)
@@ -110,7 +118,7 @@ class SpeechFrontend:
         self.context = audio[-self.CONTEXT:].copy()
         self.probabilities.append(float(prob.reshape(-1)[0]))
 
-    def finish(self, use_raw=False):
+    def finish(self, use_raw=False, source=None):
         """Flush every real sample exactly once, then return contiguous speech chunks."""
         if not self.finished:
             if self.pending.size:
@@ -125,6 +133,14 @@ class SpeechFrontend:
                 self.vad_pending = np.empty(0, np.int16)
             self.finished = True
         parts = self.raw_parts if use_raw else self.parts
+        if source == "cloud":
+            total = sum(len(p) for p in self.raw_parts)
+            if sum(len(p) for p in self.cloud_parts) == total:
+                parts = self.cloud_parts
+            else:
+                # Misaligned copy would shift every VAD boundary: send raw instead.
+                logger.warning("Cloud-denoised copy is misaligned; using raw audio")
+                parts = self.raw_parts
         audio = np.concatenate(parts) if parts else np.empty(0, np.int16)
         intervals = self._speech_intervals(len(audio))
         chunks = []

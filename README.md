@@ -90,7 +90,7 @@
 | `elevenlabs` | ElevenLabs Scribe v2 分段识别 |
 | `elevenlabs-realtime` | Scribe v2 Realtime 流式会话的最终结果，松键后约 0.2 秒 |
 
-`cloud_asr.draft: cloud` 让按住期间的草稿来自该厂商的流式识别（替代本地 FunASR 草稿）；流式连接中途失败会立即切回本地草稿，不丢失本次录音。流式会话不会自动重连，连续失败后暂停一段时间，鉴权错误后停止到重启。个人词典词条默认作为 OpenAI 识别提示；`dictionary_keywords: true` 会把词条作为强关键词偏置（实测会在噪声中把相近发音误识为词典词，默认关闭）。密钥写成 `env:YUHUANG_OPENAI_API_KEY` / `env:YUHUANG_ELEVENLABS_API_KEY`，由服务环境注入。全部选项见 `conf/config.yaml`。
+`cloud_asr.draft: cloud` 让按住期间的草稿来自该厂商的流式识别（替代本地 FunASR 草稿）；流式连接中途失败会立即切回本地草稿，不丢失本次录音。流式会话不会自动重连，连续失败后暂停一段时间，鉴权错误后停止到重启。`cloud_asr.denoise: none | webrtc | rnnoise` 可对发往云端的音频（流式与分段都生效）降噪：WebRTC 可调 `webrtc_level` 与 AGC；RNNoise（系统 `librnnoise`，48 kHz 帧，自动 16k↔48k 重采样）可用 `rnnoise_attenuation_limit_db` 限制最大衰减，防止把语音整段压掉，另有默认关闭的 VAD 门限/保持/回溯（仿 noise-suppression-for-voice）。降噪延迟已补偿，与原始音频逐样本对齐；降噪失败自动改发原始音频。默认 `none`：小样本测试中降噪没有稳定提升识别率，RNNoise 还会损伤干净语音。个人词典词条默认作为 OpenAI 识别提示；`dictionary_keywords: true` 会把词条作为强关键词偏置（实测会在噪声中把相近发音误识为词典词，默认关闭）。密钥写成 `env:YUHUANG_OPENAI_API_KEY` / `env:YUHUANG_ELEVENLABS_API_KEY`，由服务环境注入。全部选项见 `conf/config.yaml`。
 
 ###  ⚡ Push-to-Talk，像对讲机一样简单
 
@@ -278,6 +278,7 @@ YuHuang/
 │   │   ├── cloud_asr.py            # 云端识别提供方选择与回退链（OpenAI / ElevenLabs 批量）
 │   │   ├── cloud_stream.py         # 流式识别会话（OpenAI Realtime / Scribe Realtime）
 │   │   ├── speech_frontend.py      # WebRTC 降噪 + Silero VAD 分段
+│   │   ├── audio_denoise.py        # 发往云端音频的可选降噪（WebRTC / RNNoise）
 │   │   ├── personal_dictionary.py  # 个人词典
 │   │   ├── audio_capture.py        # 音频采集（PyAudio）
 │   │   └── unix_server.py          # Unix Domain Socket 服务端
