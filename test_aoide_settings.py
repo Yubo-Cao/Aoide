@@ -54,6 +54,21 @@ class DictionarySettingsTests(unittest.TestCase):
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
                 window.close()
 
+    def test_chinese_and_english_settings_pages(self):
+        from tools import aoide_settings
+
+        with patch("tools.aoide_settings.secret_store.present", return_value=False):
+            for language, expected_title, expected_tabs in (
+                ("zh_CN", "Aoide 设置", ["API 密钥", "个人词典", "输入与预览"]),
+                ("en_US", "Aoide Settings", ["API Keys", "Personal Dictionary", "Input & Preview"]),
+            ):
+                with self.subTest(language=language), patch.dict(os.environ, {"AOIDE_UI_LANG": language}):
+                    window = aoide_settings.SettingsWindow()
+                    self.assertEqual(window.windowTitle(), expected_title)
+                    tabs = window.centralWidget()
+                    self.assertEqual([tabs.tabText(i) for i in range(tabs.count())], expected_tabs)
+                    window.close()
+
 
 if __name__ == "__main__":
     unittest.main()

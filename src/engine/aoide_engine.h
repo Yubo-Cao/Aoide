@@ -40,6 +40,20 @@ FCITX_CONFIG_ENUM(PttMode, Hold, Toggle);
 FCITX_CONFIG_ENUM(CloudProvider, OpenAI, OpenAIRealtime, ElevenLabs, ElevenLabsRealtime);
 FCITX_CONFIG_ENUM(CloudDraft, Local, Cloud);
 
+struct PttModeLabels : fcitx::NoAnnotation {
+    void dumpDescription(fcitx::RawConfig &config) const {
+        config.setValueByPath("EnumI18n/0", "按住 / Hold");
+        config.setValueByPath("EnumI18n/1", "切换 / Toggle");
+    }
+};
+
+struct CloudDraftLabels : fcitx::NoAnnotation {
+    void dumpDescription(fcitx::RawConfig &config) const {
+        config.setValueByPath("EnumI18n/0", "本地 / Local");
+        config.setValueByPath("EnumI18n/1", "云端 / Cloud");
+    }
+};
+
 // ===== 配置类 (fcitx5-configtool GUI 可编辑) =====
 // 注意: double/float 非 fcitx5 原生支持, 时间值用 int (毫秒) 存储
 FCITX_CONFIGURATION(AoideConfig,
@@ -49,7 +63,7 @@ FCITX_CONFIGURATION(AoideConfig,
     // ——先按 Ctrl 再按 Alt 是 Control+Alt_L，反过来是 Alt+Control_L，
     // 是两个不同的 Key——所以"不管先按哪个都行"必须靠列表表达。
     fcitx::KeyListOption triggerKey{
-        this, "TriggerKey", "Trigger key",
+        this, "TriggerKey", "语音输入快捷键 / Push-to-talk key",
         fcitx::KeyList{fcitx::Key("Control+Alt+Y")},
         fcitx::KeyListConstrain(
             fcitx::KeyConstrainFlags{}
@@ -58,39 +72,39 @@ FCITX_CONFIGURATION(AoideConfig,
     };
 
     // ---- 触发模式 (PTT) ----
-    fcitx::Option<PttMode> triggerMode{
-        this, "TriggerMode", "Trigger mode", PttMode::Hold
+    fcitx::OptionWithAnnotation<PttMode, PttModeLabels> triggerMode{
+        this, "TriggerMode", "触发方式（按住或切换） / Trigger mode (hold or toggle)", PttMode::Hold
     };
 
     fcitx::Option<bool> checkConflicts{
         this, "CheckConflicts",
-        "Warn if trigger key conflicts with system shortcuts", true
+        "检查系统快捷键冲突 / Check system shortcut conflicts", true
     };
 
     // ---- 后端连接 ----
     fcitx::Option<std::string> backendSocket{
         this, "BackendSocket",
-        "Unix Domain Socket path for backend service",
+        "后端连接地址 / Backend socket path",
         "auto"
     };
 
     // ---- 音频设备 ----
     fcitx::Option<std::string> audioDevice{
         this, "AudioDevice",
-        "Microphone device name (leave empty for default, run 'aoide-ctl mic' to list)",
+        "麦克风设备（留空使用默认设备） / Microphone (blank uses default)",
         ""
     };
 
     // ---- 语音参数 (毫秒存储, 使用时转换) ----
     fcitx::Option<int, fcitx::IntConstrain> vadSilenceTimeoutMs{
         this, "VADSilenceTimeout",
-        "Silence timeout in milliseconds before segment finalization",
+        "语音分段静音时长（毫秒） / Silence timeout (ms)",
         800, fcitx::IntConstrain(100, 5000)
     };
 
     fcitx::Option<int, fcitx::IntConstrain> asrIntermediateInterval{
         this, "ASRIntermediateInterval",
-        "Intermediate ASR result refresh interval (ms)",
+        "实时识别刷新间隔（毫秒） / Live transcript interval (ms)",
         300, fcitx::IntConstrain(50, 2000)
     };
 
@@ -98,87 +112,87 @@ FCITX_CONFIGURATION(AoideConfig,
     // 三区文本统一由 fcitx 面板渲染，折行由引擎自己算（面板不会自动折行）
     fcitx::Option<int, fcitx::IntConstrain> panelLineWidth{
         this, "PanelLineWidth",
-        "Floating panel line width in display columns (a CJK char takes 2)",
+        "预览框每行宽度（汉字占两列） / Preview width (columns)",
         48, fcitx::IntConstrain(10, 200)
     };
 
     fcitx::Option<int, fcitx::IntConstrain> panelMaxLines{
         this, "PanelMaxLines",
-        "Max preview lines (beginning and end retained; middle folded)",
+        "预览框最多显示行数 / Maximum preview lines",
         10, fcitx::IntConstrain(4, 30)
     };
 
     fcitx::Option<int, fcitx::IntConstrain> panelFontSize{
         this, "PanelFontSize",
-        "Floating panel font size in points (self-drawn panel only)",
+        "预览框字号（仅自绘窗口） / Preview font size (points)",
         14, fcitx::IntConstrain(8, 40)
     };
 
     // ---- LLM 优化 ----
     fcitx::Option<bool> llmEnabled{
         this, "LLMEnabled",
-        "Enable LLM optimization (requires LLM backend)", false
+        "启用大模型整理 / Enable LLM text cleanup", false
     };
 
     fcitx::Option<std::string> llmBaseUrl{
         this, "LLMBaseUrl",
-        "LLM API base URL (OpenAI-compatible)",
+        "大模型 API 地址（兼容 OpenAI） / LLM API URL",
         "http://localhost:8000/v1"
     };
 
     fcitx::Option<std::string> llmApiKey{
-        this, "LLMApiKey", "Legacy LLM key reference (store new keys in Aoide Settings)", ""
+        this, "LLMApiKey", "旧密钥引用 / Legacy key reference", ""
     };
 
     fcitx::Option<std::string> llmModel{
-        this, "LLMModel", "LLM model name", "qwen2.5-7b-instruct"
+        this, "LLMModel", "大模型名称 / LLM model", "qwen2.5-7b-instruct"
     };
 
     fcitx::Option<int, fcitx::IntConstrain> llmOptimizeDelayMs{
         this, "LLMOptimizeDelay",
-        "Delay before LLM optimization (milliseconds)",
+        "开始整理前等待时间（毫秒） / Cleanup delay (ms)",
         500, fcitx::IntConstrain(0, 5000)
     };
 
     fcitx::Option<int, fcitx::IntConstrain> llmAutoCommitDelayMs{
         this, "LLMAutoCommitDelay",
-        "Delay before auto-commit after LLM (milliseconds)",
+        "整理后自动上屏等待时间（毫秒） / Auto-commit delay (ms)",
         200, fcitx::IntConstrain(0, 3000)
     };
 
     fcitx::Option<int, fcitx::IntConstrain> llmTemperature{
         this, "LLMTemperature",
-        "LLM temperature (0-100, e.g. 30 = 0.30)",
+        "大模型温度（0–100，30 表示 0.30） / LLM temperature",
         30, fcitx::IntConstrain(0, 100)
     };
 
     fcitx::Option<int, fcitx::IntConstrain> llmMaxTokens{
-        this, "LLMMaxTokens", "LLM max output tokens", 2000,
+        this, "LLMMaxTokens", "大模型输出上限（Token） / LLM max output tokens", 2000,
         fcitx::IntConstrain(64, 8192)
     };
 
     // Cloud recognition is normally configured in config.yaml. Keep that file
     // authoritative until the user explicitly opts into managing it here.
     fcitx::Option<bool> cloudASROverride{
-        this, "CloudASROverride", "Use cloud settings below (off: backend config.yaml)", false
+        this, "CloudASROverride", "覆盖 YAML 云端配置 / Override cloud YAML", false
     };
     fcitx::Option<bool> cloudASREnabled{
-        this, "CloudASREnabled", "Enable cloud recognition", false
+        this, "CloudASREnabled", "启用云端语音识别 / Enable cloud recognition", false
     };
     fcitx::Option<CloudProvider> cloudASRProvider{
-        this, "CloudASRProvider", "Final transcript provider", CloudProvider::OpenAI
+        this, "CloudASRProvider", "终稿识别服务 / Final transcript provider", CloudProvider::OpenAI
     };
-    fcitx::Option<CloudDraft> cloudASRDraft{
-        this, "CloudASRDraft", "Live draft source", CloudDraft::Local
+    fcitx::OptionWithAnnotation<CloudDraft, CloudDraftLabels> cloudASRDraft{
+        this, "CloudASRDraft", "实时草稿来源 / Live draft source", CloudDraft::Local
     };
     fcitx::Option<std::string> cloudASRApiKey{
-        this, "CloudASRApiKey", "Legacy cloud key reference (store new keys in Aoide Settings)", ""
+        this, "CloudASRApiKey", "旧云端密钥引用 / Legacy cloud key", ""
     };
     fcitx::Option<std::string> cloudASRModel{
-        this, "CloudASRModel", "Batch transcription model (empty keeps YAML value)", ""
+        this, "CloudASRModel", "批量识别模型（留空沿用 YAML） / Batch model", ""
     };
     fcitx::Option<std::string> cloudASRRealtimeModel{
-        this, "CloudASRRealtimeModel", "Realtime model (empty keeps YAML value)", ""
+        this, "CloudASRRealtimeModel", "实时识别模型（留空沿用 YAML） / Realtime model", ""
     };
 )
 
