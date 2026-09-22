@@ -9,7 +9,7 @@ import time
 from typing import Callable, Optional
 import numpy as np
 
-logger = logging.getLogger("yuhuang.audio")
+logger = logging.getLogger("aoide.audio")
 
 
 class AudioCapture:

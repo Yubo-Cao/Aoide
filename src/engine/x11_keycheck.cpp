@@ -1,14 +1,14 @@
 #include "x11_keycheck.h"
 
-#ifdef YUHUANG_HAVE_X11
+#ifdef AOIDE_HAVE_X11
 #include <X11/Xlib.h>
-#ifdef YUHUANG_HAVE_XI2
+#ifdef AOIDE_HAVE_XI2
 #include <X11/extensions/XInput2.h>
 #endif
 #include <cstdlib>
 #include <cstring>
 
-namespace yuhuang {
+namespace aoide {
 namespace {
 
 // 懒初始化独立 X 连接（只在 fcitx 主线程调用，无需 XInitThreads）
@@ -37,7 +37,7 @@ bool ensureDisplay() {
         }
         if (dpy) {
             prevHandler = XSetErrorHandler(errorHandler);
-#ifdef YUHUANG_HAVE_XI2
+#ifdef AOIDE_HAVE_XI2
             int event = 0, error = 0;
             if (XQueryExtension(dpy, "XInputExtension",
                                 &xiOpcode, &event, &error)) {
@@ -55,7 +55,7 @@ bool ensureDisplay() {
     return dpy != nullptr;
 }
 
-#ifdef YUHUANG_HAVE_XI2
+#ifdef AOIDE_HAVE_XI2
 // 订阅/退订 root 窗口上的 raw 键盘事件。
 // 只在监视期间订阅：常驻订阅会让事件在无人读取的连接上无限堆积。
 void selectRaw(bool enable) {
@@ -80,7 +80,7 @@ void drainEvents(bool track) {
     while (XPending(dpy)) {
         XEvent ev;
         XNextEvent(dpy, &ev);
-#ifdef YUHUANG_HAVE_XI2
+#ifdef AOIDE_HAVE_XI2
         if (track && ev.xcookie.type == GenericEvent &&
             ev.xcookie.extension == xiOpcode &&
             XGetEventData(dpy, &ev.xcookie)) {
@@ -115,7 +115,7 @@ int x11WatchKeyBegin(unsigned long keysym) {
     watchKc = XKeysymToKeycode(dpy, static_cast<KeySym>(keysym));
     if (watchKc == 0) return -1;
     keyDownState = 1;  // 调用方刚收到按下事件，起始状态必为按下
-#ifdef YUHUANG_HAVE_XI2
+#ifdef AOIDE_HAVE_XI2
     if (xiRawOk) {
         selectRaw(true);
         XSync(dpy, False);
@@ -138,7 +138,7 @@ int x11WatchKeyPoll() {
 
 void x11WatchKeyEnd() {
     if (!dpy) return;
-#ifdef YUHUANG_HAVE_XI2
+#ifdef AOIDE_HAVE_XI2
     if (xiRawOk) {
         selectRaw(false);
         XSync(dpy, False);
@@ -149,14 +149,14 @@ void x11WatchKeyEnd() {
     keyDownState = -1;
 }
 
-} // namespace yuhuang
+} // namespace aoide
 
 #else  // 无 X11 开发环境（纯 Wayland 构建）：看门狗降级为不可用
 
-namespace yuhuang {
+namespace aoide {
 int x11WatchKeyBegin(unsigned long) { return -1; }
 int x11WatchKeyPoll() { return -1; }
 void x11WatchKeyEnd() {}
-} // namespace yuhuang
+} // namespace aoide
 
 #endif

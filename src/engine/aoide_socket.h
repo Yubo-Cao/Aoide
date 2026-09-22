@@ -1,8 +1,8 @@
-#ifndef YUHUANG_SOCKET_H
-#define YUHUANG_SOCKET_H
+#ifndef AOIDE_SOCKET_H
+#define AOIDE_SOCKET_H
 
-#include "yuhuang_engine.h"
-#include "yuhuang_json.h"
+#include "aoide_engine.h"
+#include "aoide_json.h"
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <arpa/inet.h>
@@ -11,7 +11,7 @@
 #include <cstring>
 #include <iostream>
 
-namespace yuhuang {
+namespace aoide {
 
 inline BackendClient::BackendClient(const std::string &socketPath)
     : socketPath_(socketPath) {}
@@ -31,7 +31,7 @@ inline bool BackendClient::connect() {
 
     fd_ = ::socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd_ < 0) {
-        std::cerr << "[YuHuang] socket() failed: " << strerror(errno) << std::endl;
+        std::cerr << "[Aoide] socket() failed: " << strerror(errno) << std::endl;
         return false;
     }
 
@@ -41,7 +41,7 @@ inline bool BackendClient::connect() {
     strncpy(addr.sun_path, socketPath_.c_str(), sizeof(addr.sun_path) - 1);
 
     if (::connect(fd_, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        std::cerr << "[YuHuang] connect() to " << socketPath_
+        std::cerr << "[Aoide] connect() to " << socketPath_
                   << " failed: " << strerror(errno) << std::endl;
         ::close(fd_);
         fd_ = -1;
@@ -49,7 +49,7 @@ inline bool BackendClient::connect() {
     }
 
     connected_ = true;
-    std::cout << "[YuHuang] Connected to backend: " << socketPath_ << std::endl;
+    std::cout << "[Aoide] Connected to backend: " << socketPath_ << std::endl;
     return true;
 }
 
@@ -138,9 +138,9 @@ inline void BackendClient::receiveLoop() {
         ssize_t n = ::recv(fd_, &netLen, 4, MSG_WAITALL);
         if (n <= 0) {
             if (n == 0) {
-                std::cerr << "[YuHuang] Backend disconnected" << std::endl;
+                std::cerr << "[Aoide] Backend disconnected" << std::endl;
             } else if (errno != EINTR) {
-                std::cerr << "[YuHuang] recv() failed: " << strerror(errno) << std::endl;
+                std::cerr << "[Aoide] recv() failed: " << strerror(errno) << std::endl;
             }
             connected_.store(false);
             break;
@@ -176,6 +176,6 @@ inline void BackendClient::receiveLoop() {
     }
 }
 
-} // namespace yuhuang
+} // namespace aoide
 
-#endif // YUHUANG_SOCKET_H
+#endif // AOIDE_SOCKET_H

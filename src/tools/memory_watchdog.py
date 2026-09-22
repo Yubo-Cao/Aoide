@@ -149,7 +149,7 @@ def main():
         "--restart-cmd",
         type=str,
         default="",
-        help='杀死后执行的重启命令（如: "yuhuang-backend --memory-limit 1024"）',
+        help='杀死后执行的重启命令（如: "aoide-backend --memory-limit 1024"）',
     )
 
     args = parser.parse_args()

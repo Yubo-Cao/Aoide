@@ -4,9 +4,10 @@ import json
 import logging
 import os
 import struct
+from pathlib import Path
 from typing import Optional, Callable
 
-logger = logging.getLogger("yuhuang.server")
+logger = logging.getLogger("aoide.server")
 
 
 class UnixSocketServer:
@@ -30,6 +31,11 @@ class UnixSocketServer:
 
     async def serve(self):
         self._running = True
+        parent = Path(self.socket_path).parent
+        parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if parent.stat().st_uid != os.getuid():
+            raise PermissionError(f"Socket directory is not owned by this user: {parent}")
+        parent.chmod(0o700)
         if os.path.exists(self.socket_path):
             os.unlink(self.socket_path)
 
@@ -37,6 +43,7 @@ class UnixSocketServer:
             self._handle_client,
             path=self.socket_path,
         )
+        os.chmod(self.socket_path, 0o600)
         logger.info(f"Unix socket server started on {self.socket_path}")
 
     async def _handle_client(self, reader: asyncio.StreamReader,

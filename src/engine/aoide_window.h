@@ -1,10 +1,10 @@
-#ifndef YUHUANG_WINDOW_H
-#define YUHUANG_WINDOW_H
+#ifndef AOIDE_WINDOW_H
+#define AOIDE_WINDOW_H
 
 #include <fcitx/text.h>
 #include <memory>
 
-namespace yuhuang {
+namespace aoide {
 
 // ---- 自绘悬浮草稿窗（X11 + Cairo + Pango）----
 //
@@ -32,6 +32,7 @@ public:
     // (anchorX, anchorY, anchorH) 是应用光标矩形，根窗口坐标。
     void show(const fcitx::Text &content, int anchorX, int anchorY,
               int anchorH, int fontPt);
+    void moveToAnchor(int anchorX, int anchorY, int anchorH);
 
     void hide();
 
@@ -44,6 +45,6 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace yuhuang
+} // namespace aoide
 
-#endif // YUHUANG_WINDOW_H
+#endif // AOIDE_WINDOW_H

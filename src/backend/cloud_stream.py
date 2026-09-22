@@ -19,7 +19,7 @@ from urllib.parse import urlencode
 
 import numpy as np
 
-logger = logging.getLogger("yuhuang.cloud_stream")
+logger = logging.getLogger("aoide.cloud_stream")
 
 RATE = 16000
 
@@ -144,7 +144,7 @@ class StreamingSession:
     # ── public API (event loop only) ──
     def start(self):
         self.started_at = time.monotonic()
-        self._task = asyncio.create_task(self._run(), name=f"yuhuang-{self.name}")
+        self._task = asyncio.create_task(self._run(), name=f"aoide-{self.name}")
 
     def feed(self, pcm: bytes):
         if self.failed or self.closing or not pcm:

@@ -1,4 +1,4 @@
-"""Focused checks for conservative dictation cleanup."""
+"""Focused checks for dictation cleanup and content safeguards."""
 import tempfile
 import unittest
 from pathlib import Path
@@ -50,6 +50,18 @@ class LLMOptimizerCopyEditTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             await self.optimizer.optimize("cloud code 很好用", urgent=True),
             "Claude Code 很好用。")
+
+    async def test_filler_cleanup_and_markdown_are_accepted(self):
+        raw = "呃，我觉得第一，我们需要修复登录。然后，然后第二，测试登录。"
+        edited = "1. 修复登录。\n2. 测试登录。"
+        self.optimizer._call_llm = AsyncMock(return_value=edited)
+        self.assertEqual(await self.optimizer.optimize(raw, urgent=True), edited)
+        self.assertIn("Markdown", self.optimizer.system_prompt)
+        self.assertIn("filler words", self.optimizer.system_prompt)
+
+    async def test_number_change_still_rejected(self):
+        self.optimizer._call_llm = AsyncMock(return_value="部署 4 台服务器。")
+        self.assertIsNone(await self.optimizer.optimize("部署 3 台服务器。", urgent=True))
 
 
 if __name__ == "__main__":

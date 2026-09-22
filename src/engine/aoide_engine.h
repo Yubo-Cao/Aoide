@@ -1,5 +1,5 @@
-#ifndef YUHUANG_ENGINE_H
-#define YUHUANG_ENGINE_H
+#ifndef AOIDE_ENGINE_H
+#define AOIDE_ENGINE_H
 
 #include <fcitx/addoninstance.h>
 #include <fcitx/addonfactory.h>
@@ -22,7 +22,7 @@
 #include <fcitx-utils/eventdispatcher.h>
 #include <fcitx-utils/event.h>
 
-namespace yuhuang {
+namespace aoide {
 
 // ===== 按键符号常量 =====
 namespace vk {
@@ -42,7 +42,7 @@ FCITX_CONFIG_ENUM(CloudDraft, Local, Cloud);
 
 // ===== 配置类 (fcitx5-configtool GUI 可编辑) =====
 // 注意: double/float 非 fcitx5 原生支持, 时间值用 int (毫秒) 存储
-FCITX_CONFIGURATION(YuHuangConfig,
+FCITX_CONFIGURATION(AoideConfig,
 
     // ---- 触发键 (PTT) ----
     // 可以列多个键，任意一个都能触发。修饰键组合在 fcitx5 里是有顺序的
@@ -71,13 +71,13 @@ FCITX_CONFIGURATION(YuHuangConfig,
     fcitx::Option<std::string> backendSocket{
         this, "BackendSocket",
         "Unix Domain Socket path for backend service",
-        "/tmp/yuhuang-backend.sock"
+        "auto"
     };
 
     // ---- 音频设备 ----
     fcitx::Option<std::string> audioDevice{
         this, "AudioDevice",
-        "Microphone device name (leave empty for default, run 'yuhuang-ctl mic' to list)",
+        "Microphone device name (leave empty for default, run 'aoide-ctl mic' to list)",
         ""
     };
 
@@ -127,7 +127,7 @@ FCITX_CONFIGURATION(YuHuangConfig,
     };
 
     fcitx::Option<std::string> llmApiKey{
-        this, "LLMApiKey", "LLM API key", "token-abc123"
+        this, "LLMApiKey", "Legacy LLM key reference (store new keys in Aoide Settings)", ""
     };
 
     fcitx::Option<std::string> llmModel{
@@ -172,7 +172,7 @@ FCITX_CONFIGURATION(YuHuangConfig,
         this, "CloudASRDraft", "Live draft source", CloudDraft::Local
     };
     fcitx::Option<std::string> cloudASRApiKey{
-        this, "CloudASRApiKey", "Cloud API key (env:VARIABLE; empty keeps YAML value)", ""
+        this, "CloudASRApiKey", "Legacy cloud key reference (store new keys in Aoide Settings)", ""
     };
     fcitx::Option<std::string> cloudASRModel{
         this, "CloudASRModel", "Batch transcription model (empty keeps YAML value)", ""
@@ -227,10 +227,10 @@ struct TextSegment {
 class PanelWindow;
 
 // ===== 每个 InputContext 的状态 =====
-class YuHuangState : public fcitx::InputContextProperty {
+class AoideState : public fcitx::InputContextProperty {
 public:
-    YuHuangState(class YuHuangEngine *engine, fcitx::InputContext *ic);
-    ~YuHuangState();
+    AoideState(class AoideEngine *engine, fcitx::InputContext *ic);
+    ~AoideState();
 
     void updatePreedit(const std::string &text);
     void updatePreedit(const std::vector<TextSegment> &segments);
@@ -256,28 +256,30 @@ public:
     // 面板里正在显示的草稿全文。三区文本现在画在 fcitx 面板上，应用内嵌
     // preedit 一律留空，Enter 键要上屏的内容只能从这里取。
     const std::string &pendingText() const { return pendingText_; }
+    void relocatePreview();
 
 private:
     void fakeCommit(const std::string &text);  // 假上屏累积到候选区
     void updateFakePreedit();                   // 刷新假上屏 preedit 显示
     void clearFakePreedit();                    // 清空假上屏
 
-    YuHuangEngine *engine_;
+    AoideEngine *engine_;
     fcitx::InputContext *ic_;
     std::string pendingText_;
+    bool previewVisible_ = false;
     std::string fakeCommitted_;  // ★ 假上屏累积文本（Preedit 通道）
 };
 
 // ===== 语音输入主类（纯 addon 全局监听，不再继承 InputMethodEngine）=====
 // 拼音等其他输入法始终激活，本 addon 只在 PreInputMethod 阶段监听 PTT 专用
 // 键与打断信号，语音上屏到当前焦点应用的光标处，实现语音拼音共存。
-class YuHuangEngine : public fcitx::AddonInstance {
+class AoideEngine : public fcitx::AddonInstance {
 public:
-    // 相对 StandardPath 的 PkgConfig 根，即 ~/.config/fcitx5/conf/yuhuang.conf
-    static constexpr char kConfigPath[] = "conf/yuhuang.conf";
+    // 相对 StandardPath 的 PkgConfig 根，即 ~/.config/fcitx5/conf/aoide.conf
+    static constexpr char kConfigPath[] = "conf/aoide.conf";
 
-    explicit YuHuangEngine(fcitx::Instance *instance);
-    ~YuHuangEngine();
+    explicit AoideEngine(fcitx::Instance *instance);
+    ~AoideEngine();
 
     // 配置 (GUI 集成) — AddonInstance 虚函数
     const fcitx::Configuration *getConfig() const override {
@@ -300,9 +302,7 @@ public:
     auto instance() const { return instance_; }
 
     // 便捷配置访问
-    const std::string &backendSocket() const {
-        return config_.backendSocket.value();
-    }
+    std::string backendSocket() const;
     double vadSilenceTimeout() const {
         return config_.vadSilenceTimeoutMs.value() / 1000.0;
     }
@@ -318,7 +318,7 @@ public:
     PanelWindow *panelIfCreated();
 
     BackendClient &backend() { return *backend_; }
-    YuHuangState *currentState();
+    AoideState *currentState();
 
     // PTT 状态
     bool isListening() const { return isRecording_; }
@@ -336,6 +336,7 @@ private:
     // ★ 全局事件处理（addon 模式，PreInputMethod 阶段）
     void onGlobalKey(fcitx::KeyEvent &key);
     void onFocusOut(fcitx::InputContextEvent &event);
+    void onCursorRectChanged(fcitx::InputContextEvent &event);
 
     // ★ PTT 生命周期
     void startListening();        // PTT 按下：开始录音
@@ -350,8 +351,8 @@ private:
     void stopPttWatchdog();
 
     fcitx::Instance *instance_;
-    fcitx::FactoryFor<YuHuangState> factory_;
-    YuHuangConfig config_;
+    fcitx::FactoryFor<AoideState> factory_;
+    AoideConfig config_;
 
     // PTT 触发键与录音状态
     fcitx::KeyList triggerKeys_;
@@ -385,6 +386,7 @@ private:
     // ★ 全局事件监听句柄（PreInputMethod 阶段）
     std::unique_ptr<fcitx::HandlerTableEntry<fcitx::EventHandler>> keyWatcher_;
     std::unique_ptr<fcitx::HandlerTableEntry<fcitx::EventHandler>> focusWatcher_;
+    std::unique_ptr<fcitx::HandlerTableEntry<fcitx::EventHandler>> cursorWatcher_;
 
     // ★ 看门狗：200ms 轮询物理键位，连续 2 次未按下判定丢松键
     std::unique_ptr<fcitx::EventSourceTime> pttWatchdog_;
@@ -397,7 +399,7 @@ private:
     // 后端客户端
     std::unique_ptr<BackendClient> backend_;
 
-#ifdef YUHUANG_HAVE_PANEL
+#ifdef AOIDE_HAVE_PANEL
     // 自绘悬浮窗（panelIO_ 声明在后，析构时先摘事件源再关窗口）
     std::unique_ptr<PanelWindow> panelWindow_;
     std::unique_ptr<fcitx::EventSourceIO> panelIO_;
@@ -409,12 +411,12 @@ private:
 };
 
 // ===== Addon 工厂 =====
-class YuHuangEngineFactory : public fcitx::AddonFactory {
+class AoideEngineFactory : public fcitx::AddonFactory {
     fcitx::AddonInstance *create(fcitx::AddonManager *manager) override {
-        return new YuHuangEngine(manager->instance());
+        return new AoideEngine(manager->instance());
     }
 };
 
-} // namespace yuhuang
+} // namespace aoide
 
-#endif // YUHUANG_ENGINE_H
+#endif // AOIDE_ENGINE_H

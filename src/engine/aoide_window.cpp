@@ -1,4 +1,4 @@
-#include "yuhuang_window.h"
+#include "aoide_window.h"
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace yuhuang {
+namespace aoide {
 
 namespace {
 
@@ -144,7 +144,7 @@ bool PanelWindow::Impl::init() {
                             CWBorderPixel | CWBackPixel | CWEventMask,
                         &attrs);
     if (!win) return false;
-    XStoreName(dpy, win, "yuhuang-panel");
+    XStoreName(dpy, win, "aoide-panel");
 
     // 输入区域置空：鼠标点击穿透到下层应用，绝不抢焦点
     XShapeCombineRectangles(dpy, win, ShapeInput, 0, 0, nullptr, 0, ShapeSet,
@@ -350,6 +350,12 @@ void PanelWindow::show(const fcitx::Text &content, int anchorX, int anchorY,
     impl_->draw();
 }
 
+void PanelWindow::moveToAnchor(int anchorX, int anchorY, int anchorH) {
+    if (!impl_ || !impl_->mapped) return;
+    impl_->place(anchorX, anchorY, anchorH);
+    impl_->draw();
+}
+
 void PanelWindow::hide() {
     if (!impl_ || !impl_->mapped) return;
     XUnmapWindow(impl_->dpy, impl_->win);
@@ -372,4 +378,4 @@ void PanelWindow::processEvents() {
     if (needRedraw && impl_->mapped) impl_->draw();
 }
 
-} // namespace yuhuang
+} // namespace aoide

@@ -14,7 +14,6 @@ import base64
 import io
 import json
 import logging
-import os
 import time
 import wave
 from dataclasses import dataclass
@@ -22,20 +21,15 @@ from dataclasses import dataclass
 import httpx
 import numpy as np
 from .personal_dictionary import PersonalDictionary
+from .secret_store import resolve as resolve_key
 from .cloud_stream import (ElevenLabsRealtimeSession, OpenAIRealtimeSession, StreamGate,
                            StreamAuthError)
 
-logger = logging.getLogger("yuhuang.cloud_asr")
+logger = logging.getLogger("aoide.cloud_asr")
 
 
 class CloudASRError(RuntimeError):
     pass
-
-
-def resolve_key(spec):
-    """``env:NAME`` reads the service environment; keys never live in YAML."""
-    spec = spec or ""
-    return os.environ.get(spec[4:], "") if spec.startswith("env:") else spec
 
 
 @dataclass
@@ -74,7 +68,7 @@ class CloudRecognizer:
 
     vendor = "openai"
 
-    def __init__(self, model="gpt-transcribe", api_key="env:YUHUANG_OPENAI_API_KEY",
+    def __init__(self, model="gpt-transcribe", api_key="env:AOIDE_OPENAI_API_KEY",
                  mode="file", prompt="", noise_reduction=None, languages=("zh", "en"),
                  dictionary_prompt=True):
         self.model = model
@@ -91,7 +85,7 @@ class CloudRecognizer:
     def key(self):
         if self.auth_failed:
             raise CloudASRError("Authentication previously rejected; restart after fixing the key")
-        key = resolve_key(self.api_key)
+        key = resolve_key(self.api_key, "openai")
         if not key:
             raise CloudASRError("Cloud recognizer API key is not configured")
         return key
@@ -225,7 +219,7 @@ class ElevenLabsRecognizer:
     vendor = "elevenlabs"
     URL = "https://api.elevenlabs.io/v1/speech-to-text"
 
-    def __init__(self, model="scribe_v2", api_key="env:YUHUANG_ELEVENLABS_API_KEY",
+    def __init__(self, model="scribe_v2", api_key="env:AOIDE_ELEVENLABS_API_KEY",
                  language="", zero_retention=False, url=None, use_keyterms=False):
         self.model = model
         self.use_keyterms = use_keyterms
@@ -240,7 +234,7 @@ class ElevenLabsRecognizer:
     def key(self):
         if self.auth_failed:
             raise CloudASRError("Authentication previously rejected; restart after fixing the key")
-        key = resolve_key(self.api_key)
+        key = resolve_key(self.api_key, "elevenlabs")
         if not key:
             raise CloudASRError("ElevenLabs API key is not configured")
         return key
@@ -334,7 +328,7 @@ class CloudASR:
         self.dictionary_prompt = bool(config.get("dictionary_prompt", True))
         self.dictionary_keywords = bool(config.get("dictionary_keywords", False))
         self.openai = dict(
-            api_key=config.get("api_key", "env:YUHUANG_OPENAI_API_KEY"),
+            api_key=config.get("api_key", "env:AOIDE_OPENAI_API_KEY"),
             model=config.get("model", "gpt-transcribe"),
             realtime_model=config.get("realtime_model", "gpt-live-transcribe"),
             languages=config.get("languages", ["zh", "en"]),
@@ -344,7 +338,7 @@ class CloudASR:
         )
         eleven = config.get("elevenlabs") or {}
         self.eleven = dict(
-            api_key=eleven.get("api_key", "env:YUHUANG_ELEVENLABS_API_KEY"),
+            api_key=eleven.get("api_key", "env:AOIDE_ELEVENLABS_API_KEY"),
             model=eleven.get("model", "scribe_v2"),
             realtime_model=eleven.get("realtime_model", "scribe_v2_realtime"),
             language=eleven.get("language", ""),
@@ -380,7 +374,7 @@ class CloudASR:
         terms = keyterms(self.dictionary.reload()) if self.dictionary_keywords else []
         try:
             if self.vendor == "openai":
-                key = resolve_key(self.openai["api_key"])
+                key = resolve_key(self.openai["api_key"], "openai")
                 if not key:
                     raise CloudASRError("OpenAI API key is not configured")
                 session = OpenAIRealtimeSession(
@@ -390,7 +384,7 @@ class CloudASR:
                     connect_timeout=self.connect_timeout,
                     on_failure=self._failed(on_failure))
             else:
-                key = resolve_key(self.eleven["api_key"])
+                key = resolve_key(self.eleven["api_key"], "elevenlabs")
                 if not key:
                     raise CloudASRError("ElevenLabs API key is not configured")
                 session = ElevenLabsRealtimeSession(

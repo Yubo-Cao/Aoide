@@ -27,13 +27,14 @@ from backend.pipeline import PTTPipeline
 from backend.speech_frontend import SpeechFrontend
 from backend.cloud_asr import CloudASR
 from backend.audio_denoise import CloudDenoiser
+from backend.socket_path import resolve_socket_path
 
 # Silence shorter than this is a too-short press, not a dead microphone.
 MIC_SILENCE_MIN_SECONDS = 0.5
 # At most one "no microphone signal" desktop notification per interval.
 MIC_NOTICE_INTERVAL = 300.0
 
-logger = logging.getLogger("yuhuang")
+logger = logging.getLogger("aoide")
 
 
 class _ReopeningFileWriter:
@@ -142,10 +143,10 @@ def load_config(config_path: str) -> dict:
 def main():
     parser = argparse.ArgumentParser(description="Aoide Backend Service")
     parser.add_argument("-c", "--config",
-                        default=os.path.expanduser("~/.config/yuhuang/config.yaml"),
+                        default=os.path.expanduser("~/.config/aoide/config.yaml"),
                         help="Config file path")
     parser.add_argument("-l", "--log-file",
-                        default=os.path.expanduser("~/.config/yuhuang/backend.log"),
+                        default=os.path.expanduser("~/.config/aoide/backend.log"),
                         help="Log file path (auto-reopened if deleted)")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="Enable verbose logging")
@@ -158,8 +159,7 @@ def main():
     setup_logging("DEBUG" if args.verbose else "INFO", log_file=args.log_file)
     config = load_config(args.config)
 
-    socket_path = config.get("backend", {}).get(
-        "socket_path", "/tmp/yuhuang-backend.sock")
+    socket_path = resolve_socket_path(config.get("backend", {}).get("socket_path"))
 
     logger.info("=" * 50)
     logger.info("Aoide Backend v0.2.0")
@@ -431,7 +431,7 @@ def main():
                     _last_mic_notice = now
                     try:
                         proc = await asyncio.create_subprocess_exec(
-                            "notify-send", "语皇：麦克风没有声音", "请检查麦克风是否静音或选错了设备。")
+                            "notify-send", "Aoide：麦克风没有声音", "请检查麦克风是否静音或选错了设备。")
                         await asyncio.wait_for(proc.wait(), timeout=2)
                     except (OSError, asyncio.TimeoutError):
                         logger.warning("Could not display microphone notification")
@@ -622,7 +622,7 @@ def main():
                         "--pid", str(os.getpid()),
                         "--limit-mb", str(mem_limit),
                         "--restart-cmd",
-                        f"yuhuang-backend --memory-limit {mem_limit}",
+                        f"aoide-backend --memory-limit {mem_limit}",
                     ],
                     start_new_session=True,
                 )

@@ -1,7 +1,7 @@
-#ifndef YUHUANG_X11_KEYCHECK_H
-#define YUHUANG_X11_KEYCHECK_H
+#ifndef AOIDE_X11_KEYCHECK_H
+#define AOIDE_X11_KEYCHECK_H
 
-namespace yuhuang {
+namespace aoide {
 
 // ★ PTT 看门狗底座：XInput2 raw 事件监听物理键盘。
 //
@@ -26,6 +26,6 @@ int x11WatchKeyPoll();
 // 结束监视（取消 raw 事件订阅，防止事件在连接上无限堆积）。
 void x11WatchKeyEnd();
 
-} // namespace yuhuang
+} // namespace aoide
 
-#endif // YUHUANG_X11_KEYCHECK_H
+#endif // AOIDE_X11_KEYCHECK_H

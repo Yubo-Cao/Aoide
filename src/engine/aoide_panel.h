@@ -1,7 +1,7 @@
-#ifndef YUHUANG_PANEL_H
-#define YUHUANG_PANEL_H
+#ifndef AOIDE_PANEL_H
+#define AOIDE_PANEL_H
 
-#include "yuhuang_engine.h"
+#include "aoide_engine.h"
 #include <fcitx/candidatelist.h>
 #include <fcitx/text.h>
 #include <memory>
@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace yuhuang {
+namespace aoide {
 
 // ---- fcitx 悬浮面板里的三区渲染 ----
 //
@@ -136,6 +136,6 @@ inline fcitx::Text buildWrappedText(const std::vector<TextSegment> &segments,
     return text;
 }
 
-} // namespace yuhuang
+} // namespace aoide
 
-#endif // YUHUANG_PANEL_H
+#endif // AOIDE_PANEL_H

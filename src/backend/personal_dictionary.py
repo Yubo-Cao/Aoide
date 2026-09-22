@@ -6,12 +6,12 @@ from pathlib import Path
 
 import yaml
 
-logger = logging.getLogger("yuhuang.dictionary")
+logger = logging.getLogger("aoide.dictionary")
 
 
 class PersonalDictionary:
     def __init__(self, path=None):
-        self.path = Path(path or "~/.config/yuhuang/dictionary.yaml").expanduser()
+        self.path = Path(path or "~/.config/aoide/dictionary.yaml").expanduser()
         self.entries = []
 
     def reload(self):

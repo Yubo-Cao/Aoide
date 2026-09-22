@@ -8,9 +8,9 @@ Aoide 是 Linux 上的 fcitx5 语音输入附加组件。按住触发键说话�
 
 - **实时预览**：录音时显示语音草稿。X11 下可使用 Cairo/Pango 悬浮窗；其他环境回退到 fcitx5 候选栏。行宽、行数和字号可在图形设置中调整。
 - **本地或云端识别**：本地使用 FunASR；可选 OpenAI 或 ElevenLabs 的批量、实时识别。云端失败时可回退本地。启用云端识别会将音频发送到所选服务。
-- **可选 LLM 整理**：整理断句、标点和口语重复，尽量保留专有名词、数字及已有省略号。可通过个人词典指定术语；如果整理结果丢失内容或词典标准词，使用原识别文本。
+- **可选 LLM 整理**：删除口头禅与重复，理顺句间逻辑；确有并列事项或步骤时输出 Markdown 列表。保留专有名词、数字及已有省略号。可通过个人词典指定术语；如果整理结果丢失关键内容或词典标准词，使用原识别文本。
 - **焦点切换保护**：录音期间切换窗口会结束录音，并把结果提交到开始录音时的输入框。
-- **KDE 配置入口**：应用菜单中的“Aoide 设置”打开输入法设置；进入“附加组件 → Aoide → 配置”调整触发键、麦克风、预览、LLM 和常用云端识别选项。
+- **KDE 配置入口**：应用菜单中的“Aoide 设置”可管理 API 密钥和个人词典，并打开 fcitx5 的 Aoide 附加组件配置，调整触发键、麦克风、预览和识别选项。
 
 默认触发键为 **Pause**。按住说话，松开后等待终稿。整理模型只能依据识别文本判断停顿；原文没有停顿信息时，它无法准确补出省略号。
 
@@ -22,9 +22,9 @@ Aoide 是 Linux 上的 fcitx5 语音输入附加组件。按住触发键说话�
 ./install.sh install
 ```
 
-安装后在 KDE 应用菜单搜索 **Aoide 设置**，或运行 `fcitx5-configtool`，进入 **附加组件 → Aoide → 配置**。这里可设置录音键、预览窗、LLM 和云端识别。云端设置默认沿用 YAML；勾选 **Use cloud settings below** 后才用图形设置覆盖对应选项。
+安装后在 KDE 应用菜单搜索 **Aoide 设置**，管理密钥与个人词典。窗口中的“打开 KDE 输入法设置”会进入 fcitx5 设置；在 **附加组件 → Aoide → 配置** 调整录音键、预览窗、LLM 和云端识别。云端设置默认沿用 YAML；勾选 **Use cloud settings below** 后才用图形设置覆盖对应选项。
 
-高级设置在 `~/.config/yuhuang/config.yaml`。例如可配置降噪、个人词典、识别模型和云端服务的超时。配置模板见 [conf/config.yaml](conf/config.yaml)。密钥可通过 `env:VARIABLE` 从服务环境读取。
+高级设置在 `~/.config/aoide/config.yaml`。例如可配置降噪、识别模型和云端服务的超时。配置模板见 [conf/config.yaml](conf/config.yaml)。API 密钥由 Aoide 设置窗口存入桌面密码库（Secret Service）；旧的 `env:VARIABLE` 配置仍可用。新安装的 socket 位于 `$XDG_RUNTIME_DIR/aoide/backend.sock`；旧配置里的 `/tmp/yuhuang-backend.sock` 会自动映射到新路径。
 
 ```bash
 aoide-ctl status
@@ -32,7 +32,7 @@ aoide-ctl mic
 aoide-ctl restart
 ```
 
-`aoide-backend` 可用于前台运行后端。`aoide-ctl` 与 `aoide-backend` 是新的命令入口；原有 `yuhuang-ctl` / `yuhuang-backend` 保留为兼容别名。升级现有安装时，插件标识、用户服务 `yuhuang-backend.service` 和 `~/.config/yuhuang/` 配置目录继续沿用，原有设置无需迁移。
+`aoide-backend` 可用于前台运行后端，`aoide-ctl` 管理服务。升级安装会把旧配置、词典和服务迁移到 `~/.config/aoide/` 与 `aoide-backend.service`；词典表格保存在 `~/.config/aoide/dictionary.yaml`，下次录音时自动载入。
 
 ## 工作流程
 

@@ -5,7 +5,7 @@ import time
 from typing import Callable, Optional
 import numpy as np
 
-logger = logging.getLogger("yuhuang.asr")
+logger = logging.getLogger("aoide.asr")
 
 
 def _detect_device(preferred: str = "cuda") -> str:

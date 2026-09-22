@@ -1,4 +1,4 @@
-"""YuHuang PTT 流水线 — 三区间字符串模型 + 增量音频裁剪 + 润色结果切句提交
+"""Aoide PTT 流水线 — 三区间字符串模型 + 增量音频裁剪 + 润色结果切句提交
 
 流式识别的文本按新旧分三段推进：红区（最新草稿，离线模型必重写）→
 黄区（离线修正射程内）→ 绿区（已稳定，可提交）。绿区整段送 LLM 润色，
@@ -16,7 +16,7 @@ import logging
 from collections import deque
 from typing import Optional, List, Tuple, Callable
 
-logger = logging.getLogger("yuhuang.pipeline")
+logger = logging.getLogger("aoide.pipeline")
 
 
 class CandidateBuffer:

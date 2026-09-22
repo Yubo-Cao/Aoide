@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-logger = logging.getLogger("yuhuang.denoise")
+logger = logging.getLogger("aoide.denoise")
 
 RATE = 16000
 WEBRTC_LEVELS = {"low": 0, "moderate": 1, "high": 2, "very_high": 3}
@@ -87,7 +87,7 @@ class WebRTCEngine:
     def __init__(self, level="moderate", high_pass=True, agc=False, library=None):
         if level not in WEBRTC_LEVELS:
             raise ValueError(f"webrtc_level must be one of {sorted(WEBRTC_LEVELS)}")
-        path = library or Path.home() / ".local/lib/yuhuang/libdenoise.so"
+        path = library or Path.home() / ".local/lib/aoide/libdenoise.so"
         self.lib = ctypes.CDLL(str(path))
         self.lib.yh_denoise_create_ex.restype = ctypes.c_void_p
         self.lib.yh_denoise_create_ex.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int]

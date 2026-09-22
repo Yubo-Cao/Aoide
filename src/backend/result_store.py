@@ -8,7 +8,7 @@ from pathlib import Path
 
 class ResultStore:
     def __init__(self, directory=None):
-        self.directory = Path(directory or "~/.local/state/yuhuang/results").expanduser()
+        self.directory = Path(directory or "~/.local/state/aoide/results").expanduser()
 
     def save(self, raw, text):
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)

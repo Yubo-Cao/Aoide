@@ -1,10 +1,10 @@
-#ifndef YUHUANG_STATE_H
-#define YUHUANG_STATE_H
+#ifndef AOIDE_STATE_H
+#define AOIDE_STATE_H
 
-#include "yuhuang_engine.h"
-#include "yuhuang_panel.h"
-#ifdef YUHUANG_HAVE_PANEL
-#include "yuhuang_window.h"
+#include "aoide_engine.h"
+#include "aoide_panel.h"
+#ifdef AOIDE_HAVE_PANEL
+#include "aoide_window.h"
 #endif
 #include <fcitx/inputcontext.h>
 #include <fcitx/inputpanel.h>
@@ -12,15 +12,15 @@
 #include <fcitx-utils/color.h>
 #include <fcitx-utils/capabilityflags.h>
 
-namespace yuhuang {
+namespace aoide {
 
-inline YuHuangState::YuHuangState(YuHuangEngine *engine,
+inline AoideState::AoideState(AoideEngine *engine,
                                    fcitx::InputContext *ic)
     : engine_(engine), ic_(ic) {}
 
-inline YuHuangState::~YuHuangState() {}
+inline AoideState::~AoideState() {}
 
-inline void YuHuangState::updatePreedit(const std::string &text) {
+inline void AoideState::updatePreedit(const std::string &text) {
     if (text.empty()) {
         reset();
         return;
@@ -29,18 +29,19 @@ inline void YuHuangState::updatePreedit(const std::string &text) {
     updatePreedit(std::vector<TextSegment>{{text, ""}});
 }
 
-inline void YuHuangState::showStatus(const std::string &text) {
+inline void AoideState::showStatus(const std::string &text) {
     updatePreedit(text);
     // Status belongs only to the panel, never to a dictation candidate.
     pendingText_.clear();
 }
 
-inline void YuHuangState::commitText(const std::string &text) {
+inline void AoideState::commitText(const std::string &text) {
     if (!ic_ || text.empty()) return;
 
     // ★ 先清空面板和 client preedit，防止残留文本被自动 flush 上屏
     pendingText_.clear();
-#ifdef YUHUANG_HAVE_PANEL
+    previewVisible_ = false;
+#ifdef AOIDE_HAVE_PANEL
     if (auto *p = engine_->panelIfCreated()) p->hide();
 #endif
     ic_->inputPanel().reset();
@@ -50,10 +51,11 @@ inline void YuHuangState::commitText(const std::string &text) {
     ic_->commitString(text);
 }
 
-inline void YuHuangState::reset() {
+inline void AoideState::reset() {
     if (!ic_) return;
     pendingText_.clear();
-#ifdef YUHUANG_HAVE_PANEL
+    previewVisible_ = false;
+#ifdef AOIDE_HAVE_PANEL
     if (auto *p = engine_->panelIfCreated()) p->hide();
 #endif
     // preedit、aux、候选列表一并清掉，面板随之消失
@@ -64,7 +66,7 @@ inline void YuHuangState::reset() {
 
 // ---- 分段草稿（fcitx 悬浮面板 + 格式标记 + 自动折行）----
 
-inline void YuHuangState::updatePreedit(const std::vector<TextSegment> &segments) {
+inline void AoideState::updatePreedit(const std::vector<TextSegment> &segments) {
     if (!ic_) return;
 
     if (segments.empty()) {
@@ -74,6 +76,7 @@ inline void YuHuangState::updatePreedit(const std::vector<TextSegment> &segments
 
     pendingText_.clear();
     for (const auto &seg : segments) pendingText_ += seg.text;
+    previewVisible_ = true;
 
     // ★ 三区文本拼成一块带格式的多行文本（下划线=红区，加粗=黄区，
     // 高亮=绿区），折行位置自己算，面板只负责画
@@ -99,7 +102,7 @@ inline void YuHuangState::updatePreedit(const std::vector<TextSegment> &segments
     }
     inputPanel.setPreedit(fcitx::Text());
 
-#ifdef YUHUANG_HAVE_PANEL
+#ifdef AOIDE_HAVE_PANEL
     if (auto *panel = engine_->panel()) {
         // ★ 自绘悬浮窗：三区淡染底色自己画，定位用应用上报的光标矩形
         // （与 classicui 同源），候选栏完全不用
@@ -115,29 +118,43 @@ inline void YuHuangState::updatePreedit(const std::vector<TextSegment> &segments
             std::make_unique<PanelTextList>(std::move(block)));
     }
 
-    ic_->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
     ic_->updatePreedit();
+    ic_->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
+}
+
+inline void AoideState::relocatePreview() {
+    if (!ic_ || !previewVisible_) return;
+#ifdef AOIDE_HAVE_PANEL
+    if (auto *panel = engine_->panelIfCreated()) {
+        const auto &r = ic_->cursorRect();
+        panel->moveToAnchor(r.left(), r.top(), r.height());
+        return;
+    }
+#endif
+    // On Wayland the KDE input panel owns the popup position. Re-send its
+    // current content after the frontend reports a new caret rectangle.
+    ic_->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
 }
 
 // ---- 三级通道路上屏（按应用能力区分真上屏 / 假上屏到候选区）----
 
-inline bool YuHuangState::usePreeditChannel() const {
+inline bool AoideState::usePreeditChannel() const {
     // 应用支持候选区（client preedit）→ 绿区"提交"放假上屏，松开一次性真 commit
     return ic_ && ic_->capabilityFlags().test(fcitx::CapabilityFlag::Preedit);
 }
 
-inline bool YuHuangState::supportFormattedPreedit() const {
+inline bool AoideState::supportFormattedPreedit() const {
     // 应用支持格式化候选区（gedit）→ 下划线标记；VSCode 等靠默认渲染
     return ic_ && ic_->capabilityFlags().test(fcitx::CapabilityFlag::FormattedPreedit);
 }
 
-inline void YuHuangState::fakeCommit(const std::string &text) {
+inline void AoideState::fakeCommit(const std::string &text) {
     if (!ic_ || text.empty()) return;
     fakeCommitted_ += text;
     updateFakePreedit();
 }
 
-inline void YuHuangState::updateFakePreedit() {
+inline void AoideState::updateFakePreedit() {
     if (!ic_) return;
     fcitx::Text t;
     if (!fakeCommitted_.empty()) {
@@ -153,7 +170,7 @@ inline void YuHuangState::updateFakePreedit() {
     ic_->updatePreedit();
 }
 
-inline void YuHuangState::clearFakePreedit() {
+inline void AoideState::clearFakePreedit() {
     fakeCommitted_.clear();
     if (ic_) {
         ic_->inputPanel().setClientPreedit(fcitx::Text());
@@ -162,7 +179,7 @@ inline void YuHuangState::clearFakePreedit() {
     }
 }
 
-inline void YuHuangState::commitSmart(const std::string &text) {
+inline void AoideState::commitSmart(const std::string &text) {
     if (usePreeditChannel()) {
         fakeCommit(text);   // 假上屏：累积到应用候选区，不真 commit
     } else {
@@ -170,7 +187,7 @@ inline void YuHuangState::commitSmart(const std::string &text) {
     }
 }
 
-inline void YuHuangState::replaceSmart(int delChars, const std::string &text,
+inline void AoideState::replaceSmart(int delChars, const std::string &text,
                                         const std::string &fallback) {
     if (usePreeditChannel()) {
         // 假上屏通道：之前未真上屏，直接 commit 全文（text 含已假上屏+剩余）。
@@ -190,7 +207,7 @@ inline void YuHuangState::replaceSmart(int delChars, const std::string &text,
     }
 }
 
-inline void YuHuangState::commitAfterFocusLoss(const std::string &text,
+inline void AoideState::commitAfterFocusLoss(const std::string &text,
                                                 const std::string &fallback) {
     // The old cursor may have moved. Keep the original input context, but
     // never delete surrounding text after it loses focus.
@@ -202,13 +219,13 @@ inline void YuHuangState::commitAfterFocusLoss(const std::string &text,
     }
 }
 
-inline void YuHuangState::resetSmart() {
+inline void AoideState::resetSmart() {
     clearFakePreedit();
     reset();
 }
 
 // ★ 打断收尾提交（不删除重推，光标即将移走）
-inline void YuHuangState::interruptCommit(const std::string &text) {
+inline void AoideState::interruptCommit(const std::string &text) {
     if (usePreeditChannel()) {
         // 假上屏通道：把已假上屏的 fakeCommitted_ + 剩余拼接，一次性真上屏。
         // 之前假上屏的内容在应用候选区（preedit），commit 前必须先清掉防重复。
@@ -221,6 +238,6 @@ inline void YuHuangState::interruptCommit(const std::string &text) {
     }
 }
 
-} // namespace yuhuang
+} // namespace aoide
 
-#endif // YUHUANG_STATE_H
+#endif // AOIDE_STATE_H

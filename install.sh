@@ -9,7 +9,8 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-VENV_DIR="$HOME/.config/yuhuang/venv"
+VENV_DIR="$HOME/.config/aoide/venv"
+OLD_CONFIG_DIR="$HOME/.config/yuhuang"
 
 usage() {
     echo "Usage: $0 {install|uninstall}"
@@ -51,27 +52,30 @@ if [ "$ACTION" = "uninstall" ]; then
 
     # 1. 停止受 systemd 管理的后端服务
     echo -e "${YELLOW}[1/6] 停止后端服务...${NC}"
-    systemctl --user stop yuhuang-backend 2>/dev/null && \
+    systemctl --user stop aoide-backend 2>/dev/null && \
         echo "  ✓ Backend service stopped" || true
-    systemctl --user disable yuhuang-backend 2>/dev/null && \
+    systemctl --user disable aoide-backend 2>/dev/null && \
         echo "  ✓ Backend autostart disabled" || true
-    rm -f ~/.config/systemd/user/yuhuang-backend.service && \
+    rm -f ~/.config/systemd/user/aoide-backend.service && \
         echo "  ✓ Removed systemd user service" || true
     systemctl --user daemon-reload 2>/dev/null || true
     if [ -S /tmp/yuhuang-backend.sock ]; then
         rm -f /tmp/yuhuang-backend.sock
         echo "  ✓ Unix socket removed"
     fi
+    if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "$XDG_RUNTIME_DIR/aoide/backend.sock" ]; then
+        rm -f "$XDG_RUNTIME_DIR/aoide/backend.sock"
+        rmdir "$XDG_RUNTIME_DIR/aoide" 2>/dev/null || true
+    fi
     # 2. 删除 fcitx5 插件
     echo -e "${YELLOW}[2/6] 删除 fcitx5 插件文件...${NC}"
     REMOVED=0
-    for f in /usr/lib/fcitx5/yuhuang.so \
-             /usr/lib/x86_64-linux-gnu/fcitx5/yuhuang.so \
-             /usr/local/lib/fcitx5/yuhuang.so \
-             /usr/share/fcitx5/addon/yuhuang.conf \
-             /usr/share/fcitx5/inputmethod/yuhuang-inputmethod.conf \
-             /usr/share/fcitx5/config/yuhuang.conf \
-             /usr/share/applications/yuhuang-settings.desktop \
+    for f in /usr/lib/fcitx5/aoide.so \
+             /usr/lib/x86_64-linux-gnu/fcitx5/aoide.so \
+             /usr/local/lib/fcitx5/aoide.so \
+             /usr/share/fcitx5/addon/aoide.conf \
+             /usr/share/fcitx5/inputmethod/aoide-inputmethod.conf \
+             /usr/share/fcitx5/config/aoide.conf \
              /usr/share/applications/aoide-settings.desktop; do
         if [ -f "$f" ]; then
             sudo rm -f "$f" && echo "  ✓ Removed $f" && REMOVED=$((REMOVED+1))
@@ -82,7 +86,7 @@ if [ "$ACTION" = "uninstall" ]; then
 
     # 3. 卸载 apt 包 (仅限安装清单中记录的)
     echo -e "${YELLOW}[3/6] 卸载 apt 依赖包...${NC}"
-    MANIFEST_APT="$HOME/.config/yuhuang/manifest/apt.txt"
+    MANIFEST_APT="$HOME/.config/aoide/manifest/apt.txt"
     if [ -f "$MANIFEST_APT" ]; then
         while IFS= read -r pkg; do
             [ -z "$pkg" ] && continue
@@ -108,17 +112,17 @@ if [ "$ACTION" = "uninstall" ]; then
     echo -e "${YELLOW}[4/6] 卸载 Python 包...${NC}"
     # 优先从 venv 卸载
     if [ -f "$VENV_DIR/bin/pip" ]; then
-        "$VENV_DIR/bin/pip" uninstall -y aoide-backend yuhuang-backend 2>/dev/null && \
+        "$VENV_DIR/bin/pip" uninstall -y aoide-backend 2>/dev/null && \
             echo "  ✓ Uninstalled from venv" || echo "  - Not in venv"
     fi
     # 也检查系统 pip
-    pip3 uninstall -y aoide-backend yuhuang-backend 2>/dev/null && \
+    pip3 uninstall -y aoide-backend 2>/dev/null && \
         echo "  ✓ Uninstalled from system pip" || true
 
     # 5. 删除用户配置
     echo -e "${YELLOW}[5/6] 删除用户配置文件...${NC}"
-    [ -d ~/.config/yuhuang ] && rm -rf ~/.config/yuhuang && echo "  ✓ Removed ~/.config/yuhuang/"
-    [ -f ~/.config/fcitx5/conf/yuhuang.conf ] && rm -f ~/.config/fcitx5/conf/yuhuang.conf && \
+    [ -d ~/.config/aoide ] && rm -rf ~/.config/aoide && echo "  ✓ Removed ~/.config/aoide/"
+    [ -f ~/.config/fcitx5/conf/aoide.conf ] && rm -f ~/.config/fcitx5/conf/aoide.conf && \
         echo "  ✓ Removed fcitx5 user config"
 
     # 6. 清理项目目录
@@ -126,7 +130,7 @@ if [ "$ACTION" = "uninstall" ]; then
     [ -d "$SCRIPT_DIR/build" ] && rm -rf "$SCRIPT_DIR/build" && echo "  ✓ Removed build/"
 
     # 清理 PATH 软链接
-    for cmd in aoide-ctl aoide-backend yuhuang-ctl yuhuang-backend; do
+    for cmd in aoide-ctl aoide-backend aoide-settings; do
         [ -L "$HOME/.local/bin/$cmd" ] && rm -f "$HOME/.local/bin/$cmd" && \
             echo "  ✓ Removed ~/.local/bin/$cmd"
     done
@@ -148,17 +152,74 @@ fi
 #  INSTALL  —  环境检测 + 按需安装
 # ─────────────────────────────────────────────────────
 if [ "$ACTION" != "install" ]; then usage; fi
+if [ "$EUID" -eq 0 ]; then
+    echo -e "${RED}请不要使用 sudo 运行此脚本${NC}"
+    exit 1
+fi
+
+# Upgrade a previous YuHuang installation before creating any new defaults.
+# Keep existing YAML, vocabulary, model cache, and API environment file.
+if [ -d "$OLD_CONFIG_DIR" ] && [ ! -e "$HOME/.config/aoide" ]; then
+    systemctl --user stop yuhuang-backend.service 2>/dev/null || true
+    mv "$OLD_CONFIG_DIR" "$HOME/.config/aoide"
+    if [ -d "$VENV_DIR" ]; then
+        python3 -m venv --upgrade "$VENV_DIR"
+        OLD_VENV="$OLD_CONFIG_DIR/venv" NEW_VENV="$VENV_DIR" python3 - <<'PY'
+import os
+from pathlib import Path
+for script in (Path(os.environ["NEW_VENV"]) / "bin").iterdir():
+    if not script.is_file() or script.is_symlink():
+        continue
+    try:
+        data = script.read_bytes()
+    except OSError:
+        continue
+    old = os.environ["OLD_VENV"].encode()
+    if b"\0" not in data and old in data:
+        script.write_bytes(data.replace(old, os.environ["NEW_VENV"].encode()))
+PY
+    fi
+fi
+for base in "$HOME/.local/state" "$HOME/.local/lib" "$HOME/.local/share"; do
+    if [ -d "$base/yuhuang" ] && [ ! -e "$base/aoide" ]; then
+        mv "$base/yuhuang" "$base/aoide"
+    fi
+done
+if [ -f "$HOME/.config/fcitx5/conf/yuhuang.conf" ] && \
+   [ ! -e "$HOME/.config/fcitx5/conf/aoide.conf" ]; then
+    mv "$HOME/.config/fcitx5/conf/yuhuang.conf" "$HOME/.config/fcitx5/conf/aoide.conf"
+fi
+if [ -f "$HOME/.config/fcitx5/conf/aoide.conf" ]; then
+    sed -i -e 's|/tmp/yuhuang-backend.sock|auto|g' \
+        -e 's|YUHUANG_OPENAI_API_KEY|AOIDE_OPENAI_API_KEY|g' \
+        -e 's|YUHUANG_ELEVENLABS_API_KEY|AOIDE_ELEVENLABS_API_KEY|g' \
+        "$HOME/.config/fcitx5/conf/aoide.conf"
+fi
+if [ -f "$HOME/.config/aoide/config.yaml" ]; then
+    sed -i -e 's|/tmp/yuhuang-backend.sock|auto|g' \
+        -e 's|YUHUANG_OPENAI_API_KEY|AOIDE_OPENAI_API_KEY|g' \
+        -e 's|YUHUANG_ELEVENLABS_API_KEY|AOIDE_ELEVENLABS_API_KEY|g' \
+        "$HOME/.config/aoide/config.yaml"
+fi
+if [ -f "$HOME/.config/aoide/cloud.env" ]; then
+    sed -i -e 's|^YUHUANG_OPENAI_API_KEY=|AOIDE_OPENAI_API_KEY=|' \
+        -e 's|^YUHUANG_ELEVENLABS_API_KEY=|AOIDE_ELEVENLABS_API_KEY=|' \
+        "$HOME/.config/aoide/cloud.env"
+fi
+if [ -d "$HOME/.config/systemd/user/yuhuang-backend.service.d" ]; then
+    mv "$HOME/.config/systemd/user/yuhuang-backend.service.d" \
+       "$HOME/.config/systemd/user/aoide-backend.service.d"
+fi
+if [ -f "$HOME/.config/systemd/user/aoide-backend.service.d/cloud.conf" ]; then
+    sed -i 's|/.config/yuhuang/|/.config/aoide/|g' \
+        "$HOME/.config/systemd/user/aoide-backend.service.d/cloud.conf"
+fi
 
 echo "=========================================="
 echo "  Aoide 语音输入 — 安装"
 echo "  $(date '+%Y-%m-%d %H:%M')"
 echo "=========================================="
 echo ""
-
-if [ "$EUID" -eq 0 ]; then
-    echo -e "${RED}请不要使用 sudo 运行此脚本${NC}"
-    exit 1
-fi
 
 NEED_APT_INSTALL=""
 NEED_REBOOT="no"
@@ -199,7 +260,7 @@ else
 fi
 
 # 检查已有插件
-if [ -f /usr/lib/fcitx5/yuhuang.so ]; then
+if [ -f /usr/lib/fcitx5/aoide.so ]; then
     echo -e "  ${GREEN}✓${NC} Aoide 插件已安装 (将升级)"
     HAS_PLUGIN=true
 fi
@@ -248,6 +309,7 @@ check_pkg libxext-dev             "libxext-dev (悬浮窗点击穿透)"
 check_pkg python3-venv            "python3-venv"
 check_pkg portaudio19-dev         "portaudio19-dev (音频)"
 check_pkg pulseaudio-utils        "pulseaudio-utils"
+check_pkg libsecret-tools         "Secret Service API key storage"
 
 # ── 可选：检查 FunASR ──────────────────────────────
 HAS_FUNASR=false
@@ -258,7 +320,7 @@ if "$VENV_DIR/bin/python3" -c "import funasr" 2>/dev/null || \
 fi
 
 # ── 保存安装清单 (记录本次新装的包，供卸载时精确移除) ──
-MANIFEST_DIR="$HOME/.config/yuhuang/manifest"
+MANIFEST_DIR="$HOME/.config/aoide/manifest"
 mkdir -p "$MANIFEST_DIR"
 if [ -n "$PKGS_TO_INSTALL" ]; then
     for pkg in $PKGS_TO_INSTALL; do
@@ -325,10 +387,10 @@ mkdir -p build && cd build
 cmake .. -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_SYSCONFDIR=/etc
 make -j"$(nproc)"
 sudo make install
-if [ -f /usr/share/applications/yuhuang-settings.desktop ]; then
-    sudo rm -f /usr/share/applications/yuhuang-settings.desktop
+if [ -f /usr/share/applications/aoide-settings.desktop ]; then
+    echo -e "  ${GREEN}✓${NC} KDE 设置入口已安装"
 fi
-echo -e "${GREEN}✓ Aoide fcitx5 插件已安装 (yuhuang.so)${NC}"
+echo -e "${GREEN}✓ Aoide fcitx5 插件已安装 (aoide.so)${NC}"
 
 # ── 5. Python 虚拟环境 + 依赖 ─────────────────────
 
@@ -362,9 +424,9 @@ if [ -n "$MISSING_PIPS" ]; then
     pip install $MISSING_PIPS
 fi
 
-# 安装 Aoide 命令，同时保留旧命令兼容入口
-pip uninstall -y yuhuang-backend -q 2>/dev/null || true
-pip install -e "$SCRIPT_DIR" -q 2>/dev/null || pip install -e "$SCRIPT_DIR"
+# 安装 Aoide 命令
+pip uninstall -y aoide-backend -q 2>/dev/null || true
+pip install -e "$SCRIPT_DIR[gui]" -q 2>/dev/null || pip install -e "$SCRIPT_DIR[gui]"
 echo -e "  ${GREEN}✓${NC} aoide-backend / aoide-ctl"
 
 # 记录 pip 安装清单
@@ -380,7 +442,7 @@ sort -u "$MANIFEST_DIR/pip.txt" -o "$MANIFEST_DIR/pip.txt"
 echo ""
 echo -e "${CYAN}═══ 系统 PATH 集成 ═══${NC}"
 mkdir -p "$HOME/.local/bin"
-for cmd in aoide-ctl aoide-backend yuhuang-ctl yuhuang-backend; do
+for cmd in aoide-ctl aoide-backend aoide-settings; do
     if [ -f "$VENV_DIR/bin/$cmd" ]; then
         ln -sf "$VENV_DIR/bin/$cmd" "$HOME/.local/bin/$cmd"
         echo -e "  ${GREEN}✓${NC} ~/.local/bin/$cmd"
@@ -432,23 +494,23 @@ fi
 echo ""
 echo -e "${CYAN}═══ 用户配置 ═══${NC}"
 
-mkdir -p ~/.config/yuhuang
-if [ ! -f ~/.config/yuhuang/config.yaml ]; then
-    cp "$SCRIPT_DIR/conf/config.yaml" ~/.config/yuhuang/config.yaml
-    echo -e "  ${GREEN}✓${NC} 配置文件: ~/.config/yuhuang/config.yaml"
+mkdir -p ~/.config/aoide
+if [ ! -f ~/.config/aoide/config.yaml ]; then
+    cp "$SCRIPT_DIR/conf/config.yaml" ~/.config/aoide/config.yaml
+    echo -e "  ${GREEN}✓${NC} 配置文件: ~/.config/aoide/config.yaml"
 else
     echo -e "  ${YELLOW}○${NC} 配置文件已存在，跳过"
-    echo "    如需重置: rm ~/.config/yuhuang/config.yaml && $0"
+    echo "    如需重置: rm ~/.config/aoide/config.yaml && $0"
 fi
 
 # 复制 fcitx5 GUI 配置（仅在用户没有配置时提供默认，避免覆盖用户已调好的设置）
 mkdir -p ~/.config/fcitx5/conf
-if [ -f "$SCRIPT_DIR/build/src/engine/yuhuang.conf" ]; then
-    if [ ! -f ~/.config/fcitx5/conf/yuhuang.conf ]; then
-        cp "$SCRIPT_DIR/build/src/engine/yuhuang.conf" ~/.config/fcitx5/conf/yuhuang.conf
-        echo -e "  ${GREEN}✓${NC} fcitx5 GUI 配置: ~/.config/fcitx5/conf/yuhuang.conf"
+if [ -f "$SCRIPT_DIR/src/engine/aoide.conf" ]; then
+    if [ ! -f ~/.config/fcitx5/conf/aoide.conf ]; then
+        cp "$SCRIPT_DIR/src/engine/aoide.conf" ~/.config/fcitx5/conf/aoide.conf
+        echo -e "  ${GREEN}✓${NC} fcitx5 GUI 配置: ~/.config/fcitx5/conf/aoide.conf"
     else
-        echo -e "  ${YELLOW}○${NC} fcitx5 GUI 配置已存在，跳过（如需重置: rm ~/.config/fcitx5/conf/yuhuang.conf && $0）"
+        echo -e "  ${YELLOW}○${NC} fcitx5 GUI 配置已存在，跳过（如需重置: rm ~/.config/fcitx5/conf/aoide.conf && $0）"
     fi
 fi
 
@@ -460,24 +522,33 @@ echo -e "${CYAN}═══ 安装并启动后端服务 ═══${NC}"
 # 安装 systemd 用户服务：开机自启 + 崩溃自动重启(Restart=on-failure)
 mkdir -p ~/.config/systemd/user
 sed -e "s|@VENV_DIR@|$VENV_DIR|g" \
-    -e "s|@LOG_FILE@|$HOME/.config/yuhuang/backend.log|g" \
-    "$SCRIPT_DIR/systemd/yuhuang-backend.service.in" \
-    > ~/.config/systemd/user/yuhuang-backend.service
+    -e "s|@LOG_FILE@|$HOME/.config/aoide/backend.log|g" \
+    "$SCRIPT_DIR/systemd/aoide-backend.service.in" \
+    > ~/.config/systemd/user/aoide-backend.service
 systemctl --user daemon-reload
-systemctl --user enable yuhuang-backend 2>&1
-systemctl --user restart yuhuang-backend
+systemctl --user enable aoide-backend 2>&1
+systemctl --user restart aoide-backend
 
 # 等几秒确认启动成功
 sleep 3
-if systemctl --user is-active --quiet yuhuang-backend; then
+if systemctl --user is-active --quiet aoide-backend; then
+    systemctl --user disable --now yuhuang-backend.service 2>/dev/null || true
+    rm -f "$HOME/.config/systemd/user/yuhuang-backend.service"
+    systemctl --user daemon-reload
+    for old in /usr/lib/fcitx5/yuhuang.so \
+               /usr/share/fcitx5/addon/yuhuang.conf \
+               /usr/share/fcitx5/config/yuhuang.conf \
+               /usr/share/fcitx5/inputmethod/yuhuang.conf; do
+        if [ -f "$old" ]; then sudo rm -f "$old"; fi
+    done
     echo -e "  ${GREEN}✓${NC} 后端服务已启动 (systemd user service)"
-    echo -e "  ${GREEN}✓${NC} 已设置开机自启: systemctl --user enable yuhuang-backend"
-    echo -e "  ${GREEN}✓${NC} 日志: ~/.config/yuhuang/backend.log"
-    echo -e "  ${GREEN}✓${NC} 管理: systemctl --user status/restart yuhuang-backend"
+    echo -e "  ${GREEN}✓${NC} 已设置开机自启: systemctl --user enable aoide-backend"
+    echo -e "  ${GREEN}✓${NC} 日志: ~/.config/aoide/backend.log"
+    echo -e "  ${GREEN}✓${NC} 管理: systemctl --user status/restart aoide-backend"
 else
     echo -e "  ${YELLOW}⚠ 后端启动失败，请手动检查:${NC}"
-    echo "     systemctl --user status yuhuang-backend"
-    echo "     tail -50 ~/.config/yuhuang/backend.log"
+    echo "     systemctl --user status aoide-backend"
+    echo "     tail -50 ~/.config/aoide/backend.log"
 fi
 
 # ── 9. 刷新 fcitx5 ──────────────────────────────
@@ -507,13 +578,14 @@ echo ""
 echo "  1. 在任意输入框中使用现有输入法："
 echo "     按住 Pause 开始录音，松开后输入文本"
 echo ""
-echo "  2. 配置 LLM (可选):"
-echo "     KDE 应用菜单 → Aoide 设置 → 附加组件 → Aoide → 配置"
-echo "     或编辑 ~/.config/yuhuang/config.yaml"
+echo "  2. 配置密钥、词典和输入选项:"
+echo "     KDE 应用菜单 → Aoide 设置"
+echo "     输入选项在窗口中打开 KDE 输入法设置 → 附加组件 → Aoide → 配置"
+echo "     或编辑 ~/.config/aoide/config.yaml"
 echo ""
 echo "  3. 使用: 按住 Pause → 说话 → 松开 → 文字上屏"
 echo ""
-echo "  📋 后端日志: tail -f ~/.config/yuhuang/backend.log"
+echo "  📋 后端日志: tail -f ~/.config/aoide/backend.log"
 echo "  🎤 查看麦克风: aoide-ctl mic"
 echo "  🔄 重启后端: aoide-ctl restart"
 echo "  ⏹  停止后端: aoide-ctl stop"

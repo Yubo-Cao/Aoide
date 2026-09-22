@@ -1,9 +1,9 @@
-# YuHuang Backend Configuration
+# Aoide Backend Configuration
 # LLM settings can be overridden via fcitx5 GUI (TriggerKey, LLMBaseUrl, etc.)
 
 backend:
   # Unix Domain Socket path (must match fcitx5 plugin config)
-  socket_path: /tmp/yuhuang-backend.sock
+  socket_path: auto  # $XDG_RUNTIME_DIR/aoide/backend.sock
 
   # Log level: DEBUG, INFO, WARNING, ERROR
   log_level: INFO
@@ -121,13 +121,13 @@ cloud_asr:
   # Draft shown while the key is held: local (FunASR) | cloud (the provider
   # vendor's realtime stream; falls back to local mid-utterance on failure)
   draft: local
-  api_key: env:YUHUANG_OPENAI_API_KEY
+  api_key: env:AOIDE_OPENAI_API_KEY
   model: gpt-transcribe               # OpenAI batch model
   realtime_model: gpt-live-transcribe # OpenAI streaming model
   languages: [zh, en]                 # OpenAI language hints
   delay: low                          # gpt-live-transcribe: minimal|low|medium|high|xhigh
   prompt: ""                          # extra free-text context for OpenAI
-  # Personal dictionary (~/.config/yuhuang/dictionary.yaml):
+  # Personal dictionary (~/.config/aoide/dictionary.yaml):
   dictionary_prompt: true             # terms as OpenAI batch prompt
   dictionary_keywords: false          # terms as hard keyword bias (realtime keywords, Scribe keyterms)
   timeout: 120                        # batch request budget (s)
@@ -152,7 +152,7 @@ cloud_asr:
     rnnoise_vad_grace_ms: 200         # keep the gate open this long after voice
     rnnoise_vad_retro_ms: 0           # also open this long before voice (adds equal latency)
   elevenlabs:
-    api_key: env:YUHUANG_ELEVENLABS_API_KEY
+    api_key: env:AOIDE_ELEVENLABS_API_KEY
     model: scribe_v2
     realtime_model: scribe_v2_realtime
     language: ""                      # ISO code, empty = auto-detect

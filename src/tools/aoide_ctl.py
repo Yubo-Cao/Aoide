@@ -8,25 +8,25 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from backend.socket_path import resolve_socket_path
 
-YUHUANG_DIR = os.path.expanduser("~/.config/yuhuang")
-LOG_FILE = os.path.join(YUHUANG_DIR, "backend.log")
+AOIDE_DIR = os.path.expanduser("~/.config/aoide")
+LOG_FILE = os.path.join(AOIDE_DIR, "backend.log")
 LOG_MAX_SIZE = 2 * 1024 * 1024   # 2 MB
 LOG_MAX_FILES = 5                 # keep backend.log + backend.log.1~4
 
 
 def get_socket_path() -> str:
-    config_path = os.path.join(YUHUANG_DIR, "config.yaml")
+    config_path = os.path.join(AOIDE_DIR, "config.yaml")
     if os.path.exists(config_path):
         try:
             import yaml
             with open(config_path) as f:
                 config = yaml.safe_load(f)
-                return config.get("backend", {}).get(
-                    "socket_path", "/tmp/yuhuang-backend.sock")
+                return resolve_socket_path(config.get("backend", {}).get("socket_path"))
         except Exception:
             pass
-    return "/tmp/yuhuang-backend.sock"
+    return resolve_socket_path(None)
 
 
 def _rotate_logs():
@@ -52,10 +52,10 @@ def _rotate_logs():
 
 
 def _find_backend_pids():
-    """Return list of running yuhuang-backend PIDs (excluding grep)."""
+    """Return list of running aoide-backend PIDs (excluding grep)."""
     try:
         result = subprocess.run(
-            ["pgrep", "-f", "yuhuang-backend"],
+            ["pgrep", "-f", "aoide-backend"],
             capture_output=True, text=True, timeout=3
         )
         return [p.strip() for p in result.stdout.strip().split('\n') if p.strip()]
@@ -64,7 +64,7 @@ def _find_backend_pids():
 
 
 def _has_user_service() -> bool:
-    return (Path.home() / ".config/systemd/user/yuhuang-backend.service").is_file()
+    return (Path.home() / ".config/systemd/user/aoide-backend.service").is_file()
 
 
 def send_command(command: dict, silent: bool = False) -> dict:
@@ -148,8 +148,8 @@ def cmd_status(args):
 
     # Aoide is an addon; it does not become the selected input method.
     print()
-    addon_paths = (Path("/usr/share/fcitx5/addon/yuhuang.conf"),
-                   Path("/usr/local/share/fcitx5/addon/yuhuang.conf"))
+    addon_paths = (Path("/usr/share/fcitx5/addon/aoide.conf"),
+                   Path("/usr/local/share/fcitx5/addon/aoide.conf"))
     print("Addon:    Installed" if any(p.exists() for p in addon_paths)
           else "Addon:    Not found in standard install paths")
 
@@ -222,7 +222,7 @@ def _list_mic_devices(devices):
 
 def cmd_start(args):
     if _has_user_service() and not args.foreground and not args.config:
-        subprocess.run(["systemctl", "--user", "start", "yuhuang-backend"], check=True)
+        subprocess.run(["systemctl", "--user", "start", "aoide-backend"], check=True)
         print("Aoide backend service started")
         return
     sock_path = get_socket_path()
@@ -240,7 +240,7 @@ def cmd_start(args):
         return
 
     # Ensure config dir exists
-    os.makedirs(YUHUANG_DIR, exist_ok=True)
+    os.makedirs(AOIDE_DIR, exist_ok=True)
 
     # Rotate logs before starting (if log is too big)
     _rotate_logs()
@@ -289,7 +289,7 @@ def cmd_start(args):
 
 def cmd_restart(args):
     if _has_user_service() and not args.config:
-        subprocess.run(["systemctl", "--user", "restart", "yuhuang-backend"], check=True)
+        subprocess.run(["systemctl", "--user", "restart", "aoide-backend"], check=True)
         print("Aoide backend service restarted")
         return
     print("Restarting backend...")
@@ -303,7 +303,7 @@ def cmd_restart(args):
 
 def cmd_stop(args):
     if _has_user_service():
-        subprocess.run(["systemctl", "--user", "stop", "yuhuang-backend"], check=True)
+        subprocess.run(["systemctl", "--user", "stop", "aoide-backend"], check=True)
         print("Aoide backend service stopped")
         return
     sock_path = get_socket_path()
@@ -355,7 +355,7 @@ def cmd_gpu(args):
     """Detect GPU and allow selecting/saving CUDA device"""
     import yaml
 
-    config_path = os.path.expanduser("~/.config/yuhuang/config.yaml")
+    config_path = os.path.expanduser("~/.config/aoide/config.yaml")
 
     # Detect GPU
     try:
@@ -423,7 +423,7 @@ def cmd_gpu(args):
 
 
 def cmd_last(args):
-    path = Path.home() / ".local/state/yuhuang/results/latest.txt"
+    path = Path.home() / ".local/state/aoide/results/latest.txt"
     if not path.exists():
         print("尚无已保存的识别结果。")
         return
@@ -436,7 +436,7 @@ def cmd_last(args):
 
 
 def cmd_dictionary(args):
-    print(Path.home() / ".config/yuhuang/dictionary.yaml")
+    print(Path.home() / ".config/aoide/dictionary.yaml")
 
 
 def main():

@@ -1,9 +1,9 @@
-#include "yuhuang_engine.h"
-#include "yuhuang_state.h"
-#include "yuhuang_socket.h"
+#include "aoide_engine.h"
+#include "aoide_state.h"
+#include "aoide_socket.h"
 #include "x11_keycheck.h"
-#ifdef YUHUANG_HAVE_PANEL
-#include "yuhuang_window.h"
+#ifdef AOIDE_HAVE_PANEL
+#include "aoide_window.h"
 #endif
 #include <fcitx/inputpanel.h>
 #include <fcitx/event.h>
@@ -16,18 +16,32 @@
 #include <algorithm>
 #include <unordered_set>
 #include <ctime>
+#include <cstdlib>
+#include <unistd.h>
 
-namespace yuhuang {
+namespace aoide {
+
+std::string AoideEngine::backendSocket() const {
+    const auto &configured = config_.backendSocket.value();
+    if (!configured.empty() && configured != "auto" &&
+        configured != "/tmp/yuhuang-backend.sock") {
+        return configured;
+    }
+    const char *runtime = std::getenv("XDG_RUNTIME_DIR");
+    std::string base = runtime && *runtime
+        ? runtime : "/tmp/aoide-" + std::to_string(getuid());
+    return base + "/aoide/backend.sock";
+}
 
 // ★ PTT 关键事件日志落盘：fcitx5 手动重启后 stdout 常接在
 // 已销毁的终端上（两次卡麦事故的引擎日志全部丢失），取证必须不依赖终端。
 static void logPtt(const std::string &msg) {
-    std::cout << "[YuHuang] " << msg << std::endl;
+    std::cout << "[Aoide] " << msg << std::endl;
     static std::ofstream f;
     if (!f.is_open()) {
         const char *home = std::getenv("HOME");
         if (home) {
-            f.open(std::string(home) + "/.config/yuhuang/engine.log",
+            f.open(std::string(home) + "/.config/aoide/engine.log",
                    std::ios::app);
         }
     }
@@ -55,7 +69,7 @@ static const std::unordered_set<std::string> kKnownConflicts = {
 };
 
 // 触发键里出现过的全部修饰键取并集。
-fcitx::KeyStates YuHuangEngine::triggerModifierUnion() const {
+fcitx::KeyStates AoideEngine::triggerModifierUnion() const {
     fcitx::KeyStates all;
     for (const auto &k : triggerKeys_) {
         all |= k.states();
@@ -66,7 +80,7 @@ fcitx::KeyStates YuHuangEngine::triggerModifierUnion() const {
     return all;
 }
 
-std::string YuHuangEngine::triggerKeysToString() const {
+std::string AoideEngine::triggerKeysToString() const {
     std::string out;
     for (const auto &k : triggerKeys_) {
         if (!out.empty()) out += " / ";
@@ -78,7 +92,7 @@ std::string YuHuangEngine::triggerKeysToString() const {
 // sym 相同 + 实际修饰键包含该触发键要求的修饰键。
 // 只比 sym 会误吞普通键（实录：TriggerKey=Ctrl+Alt+Shift+Y 后 Shift+Y
 // 输入大写失效，因为 Y 的 sym 被当成 PTT 吞掉）。
-bool YuHuangEngine::isTriggerKey(const fcitx::Key &k) const {
+bool AoideEngine::isTriggerKey(const fcitx::Key &k) const {
     for (const auto &t : triggerKeys_) {
         if (k.sym() != t.sym()) continue;
         auto required = t.states();
@@ -88,7 +102,7 @@ bool YuHuangEngine::isTriggerKey(const fcitx::Key &k) const {
 }
 
 // ---- Apply config to engine state ----
-void YuHuangEngine::applyConfig() {
+void AoideEngine::applyConfig() {
     triggerKeys_ = config_.triggerKey.value();
     // 空列表意味着 PTT 完全没法触发，而最容易走到这里的情况是升级：
     // 老配置里的标量 TriggerKey=... 不会被列表 marshaller 解析（它要的是
@@ -96,7 +110,7 @@ void YuHuangEngine::applyConfig() {
     // 也不要让用户对着一个永远不响应的输入法。
     if (triggerKeys_.empty()) {
         triggerKeys_ = fcitx::KeyList{fcitx::Key("Pause")};
-        std::cerr << "[YuHuang] WARNING: TriggerKey is empty -- falling back "
+        std::cerr << "[Aoide] WARNING: TriggerKey is empty -- falling back "
                      "to Pause. A scalar 'TriggerKey=<key>' from an older "
                      "config is not read as a list; write 'TriggerKey/0=<key>' "
                      "instead, or set it once in fcitx5-configtool."
@@ -104,11 +118,11 @@ void YuHuangEngine::applyConfig() {
     }
     triggerMode_ = config_.triggerMode.value();
 
-    std::cout << "[YuHuang] Config loaded: trigger="
+    std::cout << "[Aoide] Config loaded: trigger="
               << triggerKeysToString()
               << ", mode="
               << (triggerMode_ == PttMode::Toggle ? "toggle" : "hold")
-              << ", backend=" << config_.backendSocket.value()
+              << ", backend=" << backendSocket()
               << ", vad_timeout=" << config_.vadSilenceTimeoutMs.value() << "ms"
               << ", asr_interval=" << config_.asrIntermediateInterval.value()
               << std::endl;
@@ -124,22 +138,22 @@ void YuHuangEngine::applyConfig() {
     }
 }
 
-void YuHuangEngine::checkSystemConflict(const fcitx::Key &key) {
+void AoideEngine::checkSystemConflict(const fcitx::Key &key) {
     std::string keyStr = key.toString();
     if (kKnownConflicts.count(keyStr) > 0) {
-        std::cerr << "[YuHuang] WARNING: Trigger key '" << keyStr
+        std::cerr << "[Aoide] WARNING: Trigger key '" << keyStr
                   << "' may conflict with a system shortcut!" << std::endl;
-        std::cerr << "[YuHuang]   Change it in fcitx5 config tool if needed."
+        std::cerr << "[Aoide]   Change it in fcitx5 config tool if needed."
                   << std::endl;
     }
     if (!key.isModifier()) {
-        std::cout << "[YuHuang] Trigger key '" << keyStr
+        std::cout << "[Aoide] Trigger key '" << keyStr
                   << "' is a non-modifier key. Will be consumed on press."
                   << std::endl;
     }
 }
 
-void YuHuangEngine::sendConfigToBackend() {
+void AoideEngine::sendConfigToBackend() {
     // Convert int (ms) to double (seconds) for backend
     double tempVal = config_.llmTemperature.value() / 100.0;
     double optDelay = config_.llmOptimizeDelayMs.value() / 1000.0;
@@ -187,7 +201,7 @@ void YuHuangEngine::sendConfigToBackend() {
 }
 
 // 断连时尝试重连一次。已连接则什么都不做，返回当前是否已连上。
-bool YuHuangEngine::tryReconnect() {
+bool AoideEngine::tryReconnect() {
     if (!backend_) return false;
     if (backend_->isConnected()) return true;
     backend_->disconnect();
@@ -196,23 +210,23 @@ bool YuHuangEngine::tryReconnect() {
     isFinalizing_ = false;
     isRecording_ = false;
     sendConfigToBackend();
-    std::cout << "[YuHuang] Backend reconnected" << std::endl;
+    std::cout << "[Aoide] Backend reconnected" << std::endl;
     return true;
 }
 
 // ---- Constructor / Destructor ----
-YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
+AoideEngine::AoideEngine(fcitx::Instance *instance)
     : instance_(instance),
-      factory_(std::function<YuHuangState*(fcitx::InputContext&)>(
-          [this](fcitx::InputContext &ic) -> YuHuangState* {
-              return new YuHuangState(this, &ic);
+      factory_(std::function<AoideState*(fcitx::InputContext&)>(
+          [this](fcitx::InputContext &ic) -> AoideState* {
+              return new AoideState(this, &ic);
           }
       )) {
-    instance->inputContextManager().registerProperty("yuhuangState", &factory_);
+    instance->inputContextManager().registerProperty("aoideState", &factory_);
 
     reloadConfig();
 
-    backend_ = std::make_unique<BackendClient>(config_.backendSocket.value());
+    backend_ = std::make_unique<BackendClient>(backendSocket());
 
     // 将跨线程调度器挂载到 fcitx5 事件循环
     eventDispatcher_.attach(&instance_->eventLoop());
@@ -246,16 +260,23 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
             onFocusOut(static_cast<fcitx::InputContextEvent &>(event));
         });
 
+    cursorWatcher_ = instance_->watchEvent(
+        fcitx::EventType::InputContextCursorRectChanged,
+        fcitx::EventWatcherPhase::PreInputMethod,
+        [this](fcitx::Event &event) {
+            onCursorRectChanged(static_cast<fcitx::InputContextEvent &>(event));
+        });
+
     // 注册回调（无论当前是否已连接，保证后续重连时回调依然有效）
     backend_->setResultCallback([this](const std::string &type,
                                         const std::string &text,
                                         const std::string &raw_msg) {
-        std::cout << "[YuHuang] CB recv: type=" << type
+        std::cout << "[Aoide] CB recv: type=" << type
                   << " text=" << text.substr(0, 40) << std::endl;
 
         // 通过 EventDispatcher 调度到 fcitx5 主线程执行
         eventDispatcher_.schedule([this, type, text, raw_msg]() {
-            std::cout << "[YuHuang] CB exec on main: type=" << type
+            std::cout << "[Aoide] CB exec on main: type=" << type
                       << " text=" << text.substr(0, 40) << std::endl;
 
             if (type == "finalized") {
@@ -268,13 +289,13 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
                 releasePendingKey();
                 return;
             }
-            YuHuangState *state = currentState();
+            AoideState *state = currentState();
             if (!state) {
-                std::cout << "[YuHuang] currentState() returned nullptr!" << std::endl;
+                std::cout << "[Aoide] currentState() returned nullptr!" << std::endl;
                 return;
             }
 
-            std::cout << "[YuHuang] Got state, ic="
+            std::cout << "[Aoide] Got state, ic="
                       << (state->inputContext() ? "OK" : "NULL")
                       << " program="
                       << (state->inputContext() ? state->inputContext()->program() : "?")
@@ -287,7 +308,7 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
                 std::string green = extractField(raw_msg, "green");
                 std::string yellow = extractField(raw_msg, "yellow");
                 std::string red = extractField(raw_msg, "red");
-                std::cout << "[YuHuang] preedit: green=" << green.size()
+                std::cout << "[Aoide] preedit: green=" << green.size()
                           << " yellow=" << yellow.size()
                           << " red=" << red.size()
                           << " total=" << (green.size()+yellow.size()+red.size())
@@ -296,7 +317,7 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
                 if (!green.empty()) segments.push_back({green, "green"});
                 if (!yellow.empty()) segments.push_back({yellow, "yellow"});
                 if (!red.empty()) segments.push_back({red, "red"});
-                std::cout << "[YuHuang] preedit: segments=" << segments.size()
+                std::cout << "[Aoide] preedit: segments=" << segments.size()
                           << " ic=" << (state->inputContext() ? "OK" : "NULL")
                           << std::endl;
                 if (segments.empty() && isRecording_) {
@@ -333,7 +354,7 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
                 } else {
                     state->replaceSmart(delChars, text, fallback);
                 }
-                std::cout << "[YuHuang] replace: delete=" << delChars
+                std::cout << "[Aoide] replace: delete=" << delChars
                           << " text=" << text.size() << "B"
                           << " preedit_channel=" << state->usePreeditChannel()
                           << std::endl;
@@ -353,19 +374,19 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
 
     if (backend_->connect()) {
         backend_->startReceiveLoop();
-        std::cout << "[YuHuang] Backend connected, sending config..." << std::endl;
+        std::cout << "[Aoide] Backend connected, sending config..." << std::endl;
         sendConfigToBackend();
-        std::cout << "[YuHuang] Ready for push-to-talk ("
+        std::cout << "[Aoide] Ready for push-to-talk ("
                   << (triggerMode_ == PttMode::Toggle ? "toggle" : "hold")
                   << " " << triggerKeysToString() << " to speak)" << std::endl;
     } else {
-        std::cerr << "[YuHuang] Warning: Backend not available at "
-                  << config_.backendSocket.value() << std::endl;
-        std::cerr << "[YuHuang] Start it with: yuhuang-backend" << std::endl;
+        std::cerr << "[Aoide] Warning: Backend not available at "
+                  << backendSocket() << std::endl;
+        std::cerr << "[Aoide] Start it with: aoide-backend" << std::endl;
     }
 }
 
-YuHuangEngine::~YuHuangEngine() {
+AoideEngine::~AoideEngine() {
     stopPttWatchdog();
     if (backend_) {
         backend_->disconnect();
@@ -382,7 +403,7 @@ constexpr uint64_t kTriggerReleaseGraceUs = 30000;
 constexpr uint64_t kAutoRepeatPairSkewMs = 5;
 } // namespace
 
-void YuHuangEngine::onGlobalKey(fcitx::KeyEvent &keyEvent) {
+void AoideEngine::onGlobalKey(fcitx::KeyEvent &keyEvent) {
     const fcitx::Key &key = keyEvent.key();
     bool isRelease = keyEvent.isRelease();
 
@@ -524,7 +545,7 @@ void YuHuangEngine::onGlobalKey(fcitx::KeyEvent &keyEvent) {
     // 其余情况（非录音 / 纯 release）→ 放行给拼音，不处理
 }
 
-void YuHuangEngine::onFocusOut(fcitx::InputContextEvent &event) {
+void AoideEngine::onFocusOut(fcitx::InputContextEvent &event) {
     // Fcitx has many input contexts; another window losing focus is unrelated.
     if (event.inputContext() != recordingIc_.get()) return;
     triggerHeld_ = false;
@@ -538,9 +559,22 @@ void YuHuangEngine::onFocusOut(fcitx::InputContextEvent &event) {
     }
 }
 
+void AoideEngine::onCursorRectChanged(fcitx::InputContextEvent &event) {
+    if (event.inputContext() != recordingIc_.get()) return;
+    if (auto *state = currentState()) {
+        state->relocatePreview();
+        if (isRecording_) {
+            const auto &r = event.inputContext()->cursorRect();
+            logPtt("preview caret updated: " + std::to_string(r.left()) + "," +
+                   std::to_string(r.top()) + " " + std::to_string(r.width()) +
+                   "x" + std::to_string(r.height()));
+        }
+    }
+}
+
 // ---- ★ PTT 生命周期 ----
 
-void YuHuangEngine::startListening() {
+void AoideEngine::startListening() {
     if (isFinalizing_) {
         logPtt("PTT: waiting for the previous final result; release and press again");
         return;
@@ -554,6 +588,11 @@ void YuHuangEngine::startListening() {
     // 都打到这个窗口，即使录音中用户用鼠标把焦点点走
     recordingIc_ = ic->watch();
     focusMovedDuringRecording_ = false;
+    const auto &caret = ic->cursorRect();
+    logPtt("preview initial caret: " + ic->program() + " " +
+           std::to_string(caret.left()) + "," + std::to_string(caret.top()) +
+           " " + std::to_string(caret.width()) + "x" +
+           std::to_string(caret.height()));
     auto *state = ic->propertyFor(&factory_);
     state->resetSmart();
     if (!tryReconnect()) {
@@ -573,7 +612,7 @@ void YuHuangEngine::startListening() {
     // 若实测 release 丢失（录音卡住），再考虑恢复看门狗。
 }
 
-void YuHuangEngine::stopListening() {
+void AoideEngine::stopListening() {
     // PTT 松开：全文终审（删除重推改开头错字，光标还在语音末尾）
     if (!isRecording_) return;
     isRecording_ = false;
@@ -589,7 +628,7 @@ void YuHuangEngine::stopListening() {
     }
 }
 
-void YuHuangEngine::interruptListening() {
+void AoideEngine::interruptListening() {
     // 打断：只润色剩余收尾，不删除重推（光标即将移走，会误删用户输入）
     if (!isRecording_) return;
     isRecording_ = false;
@@ -604,7 +643,7 @@ void YuHuangEngine::interruptListening() {
     // 暂扣的 press 等后端 interrupt_done 后由 releasePendingKey 放行
 }
 
-void YuHuangEngine::releasePendingKey() {
+void AoideEngine::releasePendingKey() {
     if (!hasPendingKey_) return;
     hasPendingKey_ = false;
     // ★ 防护：打断收尾期间用户若又重新按下 PTT（isRecording_=true），
@@ -626,7 +665,7 @@ void YuHuangEngine::releasePendingKey() {
     logPtt(std::string("PTT: released held key ") + pendingKey_.toString());
 }
 
-void YuHuangEngine::startPttWatchdog() {
+void AoideEngine::startPttWatchdog() {
     // X11 不可用（Wayland 会话/无 DISPLAY）时不启用，保留另外两层防御
     // 看门狗一次只能盯一个 sym：用列表里第一个。多键时其余键少了这层
     // X11 兜底，另外两层防御（release 事件、rescue-press）仍然有效。
@@ -663,14 +702,14 @@ void YuHuangEngine::startPttWatchdog() {
         });
 }
 
-void YuHuangEngine::stopPttWatchdog() {
+void AoideEngine::stopPttWatchdog() {
     // 仅供回调外部使用（析构/重配置）；回调内部靠不续期自然停摆
     pttWatchdog_.reset();
     watchdogMisses_ = 0;
 }
 
 // ---- Current focused state ----
-YuHuangState *YuHuangEngine::currentState() {
+AoideState *AoideEngine::currentState() {
     // ★ 优先使用 startListening 钉住的 IC，不跟随当前焦点——否则录音中
     // 用户用鼠标点了别的窗口，后端收尾的 commit/replace 会落到新窗口。
     // 原窗口销毁后丢弃结果，不能把延迟返回的文字写入另一个窗口。
@@ -680,8 +719,8 @@ YuHuangState *YuHuangEngine::currentState() {
 }
 
 // ---- 自绘悬浮窗 ----
-PanelWindow *YuHuangEngine::panel() {
-#ifdef YUHUANG_HAVE_PANEL
+PanelWindow *AoideEngine::panel() {
+#ifdef AOIDE_HAVE_PANEL
     if (!panelTried_) {
         panelTried_ = true;   // 只试一次，连不上 X 就永远走候选栏回退
 
@@ -718,8 +757,8 @@ PanelWindow *YuHuangEngine::panel() {
 #endif
 }
 
-PanelWindow *YuHuangEngine::panelIfCreated() {
-#ifdef YUHUANG_HAVE_PANEL
+PanelWindow *AoideEngine::panelIfCreated() {
+#ifdef AOIDE_HAVE_PANEL
     return panelWindow_.get();
 #else
     return nullptr;
@@ -727,6 +766,6 @@ PanelWindow *YuHuangEngine::panelIfCreated() {
 }
 
 // Register addon factory
-FCITX_ADDON_FACTORY(YuHuangEngineFactory);
+FCITX_ADDON_FACTORY(AoideEngineFactory);
 
-} // namespace yuhuang
+} // namespace aoide

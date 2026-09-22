@@ -12,12 +12,12 @@ import numpy as np
 
 
 RATE = 16000
-logger = logging.getLogger("yuhuang.frontend")
+logger = logging.getLogger("aoide.frontend")
 
 
 class Denoiser:
     def __init__(self, path=None):
-        path = path or Path.home() / ".local/lib/yuhuang/libdenoise.so"
+        path = path or Path.home() / ".local/lib/aoide/libdenoise.so"
         self.lib = ctypes.CDLL(str(path))
         self.lib.yh_denoise_create.restype = ctypes.c_void_p
         self.lib.yh_denoise_free.argtypes = [ctypes.c_void_p]
@@ -60,7 +60,7 @@ class SpeechFrontend:
         options = ort.SessionOptions()
         options.intra_op_num_threads = 1
         options.inter_op_num_threads = 1
-        path = model_path or Path.home() / ".local/share/yuhuang/models/silero_vad.onnx"
+        path = model_path or Path.home() / ".local/share/aoide/models/silero_vad.onnx"
         self.vad = ort.InferenceSession(str(path), sess_options=options,
                                        providers=["CPUExecutionProvider"])
         self.denoiser = Denoiser() if denoise else None
