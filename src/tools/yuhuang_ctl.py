@@ -1,4 +1,4 @@
-"""YuHuang control tool — mic toggle, service management, status query"""
+"""Aoide control tool — mic toggle, service management, status query"""
 import argparse
 import json
 import os
@@ -63,6 +63,10 @@ def _find_backend_pids():
         return []
 
 
+def _has_user_service() -> bool:
+    return (Path.home() / ".config/systemd/user/yuhuang-backend.service").is_file()
+
+
 def send_command(command: dict, silent: bool = False) -> dict:
     """Send a JSON command to the backend via Unix socket.
 
@@ -114,7 +118,7 @@ def cmd_status(args):
     sock_exists = os.path.exists(sock_path)
     pids = _find_backend_pids()
 
-    print("YuHuang Status")
+    print("Aoide Status")
     print("=" * 48)
 
     # --- Backend status ---
@@ -142,24 +146,12 @@ def cmd_status(args):
     else:
         print(f"Log:      {LOG_FILE}  (not present)")
 
-    # --- fcitx5 IM status ---
+    # Aoide is an addon; it does not become the selected input method.
     print()
-    try:
-        result = subprocess.run(
-            ["fcitx5-remote", "-n"],
-            capture_output=True, text=True, timeout=2
-        )
-        if result.returncode == 0:
-            current_im = result.stdout.strip()
-            print(f"Current IM: {current_im}")
-            if "yuhuang" in current_im.lower():
-                print("YuHuang:   Active")
-            else:
-                print("YuHuang:   Not active (switch with: fcitx5-remote -s yuhuang)")
-        else:
-            print("fcitx5:     Not running or fcitx5-remote not found")
-    except Exception:
-        print("fcitx5:     Not detected")
+    addon_paths = (Path("/usr/share/fcitx5/addon/yuhuang.conf"),
+                   Path("/usr/local/share/fcitx5/addon/yuhuang.conf"))
+    print("Addon:    Installed" if any(p.exists() for p in addon_paths)
+          else "Addon:    Not found in standard install paths")
 
 
 def cmd_toggle(args):
@@ -222,13 +214,17 @@ def _list_mic_devices(devices):
             print(f"  [{i}] {dev['name']}{marker}")
     print()
     print("Copy a device name and paste into:")
-    print("  fcitx5-configtool → 附加组件 → YuHuang → 配置 → AudioDevice")
+    print("  fcitx5-configtool → 附加组件 → Aoide → 配置 → AudioDevice")
     print()
     print("Or set directly:")
-    print('  yuhuang-ctl mic "<device name part>"')
+    print('  aoide-ctl mic "<device name part>"')
 
 
 def cmd_start(args):
+    if _has_user_service() and not args.foreground and not args.config:
+        subprocess.run(["systemctl", "--user", "start", "yuhuang-backend"], check=True)
+        print("Aoide backend service started")
+        return
     sock_path = get_socket_path()
     if os.path.exists(sock_path):
         print("Backend may already be running. Trying to stop first...")
@@ -236,11 +232,11 @@ def cmd_start(args):
         time.sleep(0.5)
 
     try:
-        subprocess.run(["which", "yuhuang-backend"],
+        subprocess.run(["which", "aoide-backend"],
                        capture_output=True, check=True)
     except subprocess.CalledProcessError:
-        print("yuhuang-backend not found in PATH.")
-        print("Install with: pip install -e /path/to/yuhuang")
+        print("aoide-backend not found in PATH.")
+        print("Install with: pip install -e /path/to/Aoide")
         return
 
     # Ensure config dir exists
@@ -250,11 +246,11 @@ def cmd_start(args):
     _rotate_logs()
 
     config_path = args.config if args.config else ""
-    cmd = ["yuhuang-backend", "--log-file", LOG_FILE]
+    cmd = ["aoide-backend", "--log-file", LOG_FILE]
     if config_path:
         cmd.extend(["-c", config_path])
 
-    print("Starting yuhuang-backend...")
+    print("Starting aoide-backend...")
     if args.foreground:
         os.execvp(cmd[0], cmd)
         return  # unreachable
@@ -292,6 +288,10 @@ def cmd_start(args):
 
 
 def cmd_restart(args):
+    if _has_user_service() and not args.config:
+        subprocess.run(["systemctl", "--user", "restart", "yuhuang-backend"], check=True)
+        print("Aoide backend service restarted")
+        return
     print("Restarting backend...")
     cmd_stop(args)
     # Wait for old process to fully exit + socket cleanup
@@ -302,6 +302,10 @@ def cmd_restart(args):
 
 
 def cmd_stop(args):
+    if _has_user_service():
+        subprocess.run(["systemctl", "--user", "stop", "yuhuang-backend"], check=True)
+        print("Aoide backend service stopped")
+        return
     sock_path = get_socket_path()
 
     # Remove stale socket first
@@ -344,16 +348,7 @@ def cmd_stop(args):
 
 
 def cmd_switch(args):
-    try:
-        subprocess.run(
-            ["fcitx5-remote", "-s", "yuhuang"],
-            check=True, timeout=2
-        )
-        print("Switched to YuHuang input method")
-    except FileNotFoundError:
-        print("fcitx5-remote not found. Is fcitx5 installed?")
-    except subprocess.CalledProcessError:
-        print("Failed to switch. Make sure YuHuang addon is installed.")
+    print("Aoide runs as a global fcitx5 addon; no input-method switch is needed.")
 
 
 def cmd_gpu(args):
@@ -415,16 +410,16 @@ def cmd_gpu(args):
             print(f"Updated: device={new_device}")
             print(f"Saved to: {config_path}")
             print("\nRestart backend for changes to take effect:")
-            print("  yuhuang-ctl restart")
+            print("  aoide-ctl restart")
         except Exception as e:
             print(f"Failed to save config: {e}")
     else:
         print()
         print("Set device (examples):")
-        print("  yuhuang-ctl gpu cuda      # Use NVIDIA GPU 0 (default)")
-        print("  yuhuang-ctl gpu cuda:1    # Use NVIDIA GPU 1")
-        print("  yuhuang-ctl gpu mps       # Use Apple Silicon GPU")
-        print("  yuhuang-ctl gpu cpu       # Use CPU only")
+        print("  aoide-ctl gpu cuda      # Use NVIDIA GPU 0 (default)")
+        print("  aoide-ctl gpu cuda:1    # Use NVIDIA GPU 1")
+        print("  aoide-ctl gpu mps       # Use Apple Silicon GPU")
+        print("  aoide-ctl gpu cpu       # Use CPU only")
 
 
 def cmd_last(args):
@@ -446,12 +441,12 @@ def cmd_dictionary(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="yuhuang-ctl",
-        description="YuHuang voice input method control tool"
+        prog="aoide-ctl",
+        description="Aoide voice input method control tool"
     )
     subparsers = parser.add_subparsers(dest="command", help="Command")
 
-    subparsers.add_parser("status", help="Show YuHuang status")
+    subparsers.add_parser("status", help="Show Aoide status")
     start_parser = subparsers.add_parser("start", help="Start backend service")
     start_parser.add_argument("-c", "--config", help="Config file path")
     start_parser.add_argument("-f", "--foreground", action="store_true",
@@ -467,7 +462,7 @@ def main():
     mic_parser = subparsers.add_parser("mic", help="List or set audio input device")
     mic_parser.add_argument("device", nargs="?", default=None,
                             help="Device name to search and set (partial match)")
-    subparsers.add_parser("switch", help="Switch to YuHuang input method")
+    subparsers.add_parser("switch", help="Explain addon mode (legacy command)")
     gpu_parser = subparsers.add_parser("gpu", help="Detect GPU and set CUDA device")
     gpu_parser.add_argument("device", nargs="?", default=None,
                             help="Device to use: cuda, cuda:0, cuda:1, mps, cpu")

@@ -85,9 +85,15 @@ class LLMOptimizer:
             "Preserve every English sentence embedded in Chinese and every Chinese sentence "
             "embedded in English. NEVER translate, summarize, shorten, omit a passage, "
             "or merge repeated full sentences. Preserve names, numbers, units, negation, "
-            "technical terms, and the speaker's meaning. Only fix punctuation, spacing, "
-            "obvious immediate stutters, and unambiguous typos. Do not guess a different "
-            "proper noun from a similar sound. Use paragraph breaks where appropriate. "
+            "technical terms, and the speaker's meaning. Add natural punctuation, including "
+            "an ellipsis (…… in Chinese, ... in English) when the transcript indicates a trailing "
+            "thought or self-interruption; preserve any ellipsis already in the transcript. "
+            "Fix spacing, obvious immediate stutters, and unambiguous typos. Spell Chinese "
+            "and English proper nouns and technical terms with their established capitalization "
+            "when the transcript, supplied vocabulary, or surrounding context supports the "
+            "correction (for example, Claude Code and FunASR). Do not invent or insert "
+            "a name solely because it appears in the vocabulary or context. Use paragraph "
+            "breaks where appropriate. "
             "If uncertain, keep the original words. Output only the complete edited text, "
             "without explanation, heading, quotation marks, or code fences."
         )
@@ -108,6 +114,11 @@ class LLMOptimizer:
         digits = re.sub(r"\D", "", raw)
         if digits and digits != re.sub(r"\D", "", refined):
             return False
+        # Punctuation is otherwise ignored by this guard. Do not silently lose
+        # an ellipsis that was already present in the ASR transcript.
+        ellipses = lambda s: len(re.findall(r"…+|\.{3,}", s))
+        if ellipses(refined) < ellipses(raw):
+            return False
         return True
 
     async def _checked_call(self, text, prompt, urgent):
@@ -118,9 +129,16 @@ class LLMOptimizer:
         result = await self._call_llm(prompt, urgent=urgent)
         if result:
             result = dictionary.apply_aliases(result)
-        if result and not self._preserves_content(dictionary.apply_aliases(text), result):
-            logger.warning("LLM cleanup dropped content or changed numbers; keeping full ASR transcript")
-            return None
+        if result:
+            original = dictionary.apply_aliases(text)
+            if not self._preserves_content(original, result):
+                logger.warning("LLM cleanup dropped content, ellipsis, or changed numbers; keeping full ASR transcript")
+                return None
+            for entry in dictionary.entries:
+                term = entry["term"]
+                if term in original and term not in result:
+                    logger.warning("LLM cleanup changed a dictionary term; keeping full ASR transcript")
+                    return None
         return result
 
     def update_config(self, **kwargs):

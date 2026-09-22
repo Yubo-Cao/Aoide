@@ -1,11 +1,11 @@
 [Unit]
-Description=YuHuang voice input backend (FunASR ASR + LLM refine)
+Description=Aoide voice input backend (FunASR ASR + LLM refine)
 # 等图形会话起来（fcitx5 是 autostart 启动，后端随会话启动即可）
 After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=@VENV_DIR@/bin/yuhuang-backend
+ExecStart=@VENV_DIR@/bin/aoide-backend
 Restart=on-failure
 RestartSec=3
 # 日志保持与手动启动时相同的位置，便于对照排障

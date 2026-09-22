@@ -23,12 +23,12 @@ if(X11_FOUND)
     if(X11_Xi_FOUND)
         target_link_libraries(yuhuang PRIVATE ${X11_Xi_LIB})
         target_compile_definitions(yuhuang PRIVATE YUHUANG_HAVE_XI2)
-        message(STATUS "YuHuang: X11+Xi found, PTT watchdog with XI2 raw events")
+        message(STATUS "Aoide: X11+Xi found, PTT watchdog with XI2 raw events")
     else()
-        message(STATUS "YuHuang: X11 found (no Xi), PTT watchdog keymap-only")
+        message(STATUS "Aoide: X11 found (no Xi), PTT watchdog keymap-only")
     endif()
 else()
-    message(STATUS "YuHuang: X11 not found, PTT watchdog disabled")
+    message(STATUS "Aoide: X11 not found, PTT watchdog disabled")
 endif()
 
 # ★ 自绘悬浮草稿窗依赖 cairo + pango（三区淡染底色 classicui 画不出来）
@@ -40,12 +40,12 @@ if(PKG_CONFIG_FOUND AND X11_FOUND AND X11_Xext_FOUND)
         target_sources(yuhuang PRIVATE yuhuang_window.cpp)
         target_link_libraries(yuhuang PRIVATE PkgConfig::PANEL ${X11_Xext_LIB})
         target_compile_definitions(yuhuang PRIVATE YUHUANG_HAVE_PANEL)
-        message(STATUS "YuHuang: cairo/pango found, self-drawn floating panel enabled")
+        message(STATUS "Aoide: cairo/pango found, self-drawn floating panel enabled")
     else()
-        message(STATUS "YuHuang: cairo/pango not found, floating panel falls back to candidate bar")
+        message(STATUS "Aoide: cairo/pango not found, floating panel falls back to candidate bar")
     endif()
 else()
-    message(STATUS "YuHuang: pkg-config/Xext missing, floating panel falls back to candidate bar")
+    message(STATUS "Aoide: pkg-config/Xext missing, floating panel falls back to candidate bar")
 endif()
 
 target_include_directories(yuhuang PRIVATE
@@ -70,3 +70,8 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/yuhuang-addon.conf"
 # 安装配置文件 (带 GUI 描述，供 fcitx5-configtool 使用)
 install(FILES yuhuang.conf
         DESTINATION "${FCITX_INSTALL_PKGDATADIR}/config")
+
+# KDE's Input Method KCM hosts the native addon configuration page. Give it a
+# searchable application-launcher entry so users can find it by product name.
+install(FILES aoide-settings.desktop
+        DESTINATION "share/applications")

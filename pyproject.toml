@@ -1,12 +1,12 @@
-# YuHuang Backend - Speech Recognition + LLM Optimization Service
+# Aoide backend - speech recognition and optional LLM cleanup
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "yuhuang-backend"
+name = "aoide-backend"
 version = "0.2.0"
-description = "YuHuang voice input method backend: FunASR + VAD + LLM optimization"
+description = "Aoide fcitx5 voice input backend: FunASR, cloud ASR, and LLM cleanup"
 requires-python = ">=3.11"
 dependencies = [
     "funasr>=1.2.7",
@@ -30,6 +30,8 @@ dependencies = [
 bedrock = ["boto3>=1.34"]
 
 [project.scripts]
+aoide-backend = "backend.main:main"
+aoide-ctl = "tools.yuhuang_ctl:main"
 yuhuang-backend = "backend.main:main"
 yuhuang-ctl = "tools.yuhuang_ctl:main"
 

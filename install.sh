@@ -1,5 +1,5 @@
 #!/bin/bash
-# YuHuang 一键安装/卸载脚本 — Ubuntu 24.04 + fcitx5
+# Aoide installer for Ubuntu 24.04 + fcitx5
 set -e
 
 RED='\033[0;31m'
@@ -14,8 +14,8 @@ VENV_DIR="$HOME/.config/yuhuang/venv"
 usage() {
     echo "Usage: $0 {install|uninstall}"
     echo ""
-    echo "  install   - Install/upgrade YuHuang voice input method (default)"
-    echo "  uninstall - Remove YuHuang completely"
+    echo "  install   - Install/upgrade Aoide voice input (default)"
+    echo "  uninstall - Remove Aoide completely"
     exit 1
 }
 
@@ -45,11 +45,11 @@ ver_ge() {
 # ─────────────────────────────────────────────────────
 if [ "$ACTION" = "uninstall" ]; then
     echo "=========================================="
-    echo "  YuHuang 卸载"
+    echo "  Aoide 卸载"
     echo "=========================================="
     echo ""
 
-    # 1. 停止后端（systemd 用户服务 + 兼容旧版 nohup 进程）
+    # 1. 停止受 systemd 管理的后端服务
     echo -e "${YELLOW}[1/6] 停止后端服务...${NC}"
     systemctl --user stop yuhuang-backend 2>/dev/null && \
         echo "  ✓ Backend service stopped" || true
@@ -62,14 +62,6 @@ if [ "$ACTION" = "uninstall" ]; then
         rm -f /tmp/yuhuang-backend.sock
         echo "  ✓ Unix socket removed"
     fi
-    PIDS=$(pgrep -f "yuhuang-backend" 2>/dev/null || true)
-    if [ -n "$PIDS" ]; then
-        kill $PIDS 2>/dev/null || true
-        echo "  ✓ Backend processes stopped (PID: ${PIDS//$'\n'/ })"
-    else
-        echo "  - No running backend"
-    fi
-
     # 2. 删除 fcitx5 插件
     echo -e "${YELLOW}[2/6] 删除 fcitx5 插件文件...${NC}"
     REMOVED=0
@@ -78,7 +70,9 @@ if [ "$ACTION" = "uninstall" ]; then
              /usr/local/lib/fcitx5/yuhuang.so \
              /usr/share/fcitx5/addon/yuhuang.conf \
              /usr/share/fcitx5/inputmethod/yuhuang-inputmethod.conf \
-             /usr/share/fcitx5/config/yuhuang.conf; do
+             /usr/share/fcitx5/config/yuhuang.conf \
+             /usr/share/applications/yuhuang-settings.desktop \
+             /usr/share/applications/aoide-settings.desktop; do
         if [ -f "$f" ]; then
             sudo rm -f "$f" && echo "  ✓ Removed $f" && REMOVED=$((REMOVED+1))
         fi
@@ -114,11 +108,11 @@ if [ "$ACTION" = "uninstall" ]; then
     echo -e "${YELLOW}[4/6] 卸载 Python 包...${NC}"
     # 优先从 venv 卸载
     if [ -f "$VENV_DIR/bin/pip" ]; then
-        "$VENV_DIR/bin/pip" uninstall -y yuhuang-backend 2>/dev/null && \
+        "$VENV_DIR/bin/pip" uninstall -y aoide-backend yuhuang-backend 2>/dev/null && \
             echo "  ✓ Uninstalled from venv" || echo "  - Not in venv"
     fi
     # 也检查系统 pip
-    pip3 uninstall -y yuhuang-backend 2>/dev/null && \
+    pip3 uninstall -y aoide-backend yuhuang-backend 2>/dev/null && \
         echo "  ✓ Uninstalled from system pip" || true
 
     # 5. 删除用户配置
@@ -132,7 +126,7 @@ if [ "$ACTION" = "uninstall" ]; then
     [ -d "$SCRIPT_DIR/build" ] && rm -rf "$SCRIPT_DIR/build" && echo "  ✓ Removed build/"
 
     # 清理 PATH 软链接
-    for cmd in yuhuang-ctl yuhuang-backend; do
+    for cmd in aoide-ctl aoide-backend yuhuang-ctl yuhuang-backend; do
         [ -L "$HOME/.local/bin/$cmd" ] && rm -f "$HOME/.local/bin/$cmd" && \
             echo "  ✓ Removed ~/.local/bin/$cmd"
     done
@@ -156,7 +150,7 @@ fi
 if [ "$ACTION" != "install" ]; then usage; fi
 
 echo "=========================================="
-echo "  YuHuang 语音输入法 — 安装"
+echo "  Aoide 语音输入 — 安装"
 echo "  $(date '+%Y-%m-%d %H:%M')"
 echo "=========================================="
 echo ""
@@ -206,7 +200,7 @@ fi
 
 # 检查已有插件
 if [ -f /usr/lib/fcitx5/yuhuang.so ]; then
-    echo -e "  ${GREEN}✓${NC} YuHuang 插件已安装 (将升级)"
+    echo -e "  ${GREEN}✓${NC} Aoide 插件已安装 (将升级)"
     HAS_PLUGIN=true
 fi
 
@@ -331,7 +325,10 @@ mkdir -p build && cd build
 cmake .. -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_SYSCONFDIR=/etc
 make -j"$(nproc)"
 sudo make install
-echo -e "${GREEN}✓ YuHuang fcitx5 插件已安装 (yuhuang.so)${NC}"
+if [ -f /usr/share/applications/yuhuang-settings.desktop ]; then
+    sudo rm -f /usr/share/applications/yuhuang-settings.desktop
+fi
+echo -e "${GREEN}✓ Aoide fcitx5 插件已安装 (yuhuang.so)${NC}"
 
 # ── 5. Python 虚拟环境 + 依赖 ─────────────────────
 
@@ -365,9 +362,10 @@ if [ -n "$MISSING_PIPS" ]; then
     pip install $MISSING_PIPS
 fi
 
-# 安装 yuhuang-ctl (editable mode，只在首次或升级时)
+# 安装 Aoide 命令，同时保留旧命令兼容入口
+pip uninstall -y yuhuang-backend -q 2>/dev/null || true
 pip install -e "$SCRIPT_DIR" -q 2>/dev/null || pip install -e "$SCRIPT_DIR"
-echo -e "  ${GREEN}✓${NC} yuhuang-backend / yuhuang-ctl"
+echo -e "  ${GREEN}✓${NC} aoide-backend / aoide-ctl"
 
 # 记录 pip 安装清单
 if [ -n "$MISSING_PIPS" ]; then
@@ -375,14 +373,14 @@ if [ -n "$MISSING_PIPS" ]; then
         echo "$pkg" >> "$MANIFEST_DIR/pip.txt"
     done
 fi
-echo "yuhuang-backend" >> "$MANIFEST_DIR/pip.txt"
+echo "aoide-backend" >> "$MANIFEST_DIR/pip.txt"
 sort -u "$MANIFEST_DIR/pip.txt" -o "$MANIFEST_DIR/pip.txt"
 
-# 创建 PATH 软链接 (使 yuhuang-ctl / yuhuang-backend 全局可用)
+# 创建 Aoide 命令和兼容别名的 PATH 软链接
 echo ""
 echo -e "${CYAN}═══ 系统 PATH 集成 ═══${NC}"
 mkdir -p "$HOME/.local/bin"
-for cmd in yuhuang-ctl yuhuang-backend; do
+for cmd in aoide-ctl aoide-backend yuhuang-ctl yuhuang-backend; do
     if [ -f "$VENV_DIR/bin/$cmd" ]; then
         ln -sf "$VENV_DIR/bin/$cmd" "$HOME/.local/bin/$cmd"
         echo -e "  ${GREEN}✓${NC} ~/.local/bin/$cmd"
@@ -459,14 +457,6 @@ fi
 echo ""
 echo -e "${CYAN}═══ 安装并启动后端服务 ═══${NC}"
 
-# 先停掉旧的 nohup 手动进程（兼容旧版本留下的）
-OLD_PIDS=$(pgrep -f "yuhuang-backend" 2>/dev/null || true)
-if [ -n "$OLD_PIDS" ]; then
-    echo -e "  ${YELLOW}○${NC} 停止旧后端进程..."
-    kill $OLD_PIDS 2>/dev/null || true
-    sleep 1
-fi
-
 # 安装 systemd 用户服务：开机自启 + 崩溃自动重启(Restart=on-failure)
 mkdir -p ~/.config/systemd/user
 sed -e "s|@VENV_DIR@|$VENV_DIR|g" \
@@ -474,7 +464,8 @@ sed -e "s|@VENV_DIR@|$VENV_DIR|g" \
     "$SCRIPT_DIR/systemd/yuhuang-backend.service.in" \
     > ~/.config/systemd/user/yuhuang-backend.service
 systemctl --user daemon-reload
-systemctl --user enable --now yuhuang-backend 2>&1
+systemctl --user enable yuhuang-backend 2>&1
+systemctl --user restart yuhuang-backend
 
 # 等几秒确认启动成功
 sleep 3
@@ -494,7 +485,7 @@ fi
 echo ""
 echo -e "${CYAN}═══ 刷新输入法 ═══${NC}"
 if command -v fcitx5 &>/dev/null; then
-    fcitx5 -r -d 2>/dev/null && echo -e "  ${GREEN}✓${NC} fcitx5 已刷新，YuHuang 已就绪" || \
+    fcitx5 -r -d 2>/dev/null && echo -e "  ${GREEN}✓${NC} fcitx5 已刷新，Aoide 已就绪" || \
         echo -e "  ${YELLOW}○${NC} fcitx5 未运行，启动后生效${NC}"
 fi
 
@@ -502,7 +493,7 @@ fi
 
 echo ""
 echo "=========================================="
-echo -e "${GREEN}  YuHuang 安装完成！${NC}"
+echo -e "${GREEN}  Aoide 安装完成！${NC}"
 echo "=========================================="
 echo ""
 
@@ -513,19 +504,18 @@ fi
 
 echo "快速使用:"
 echo ""
-echo "  1. 切换输入法:"
-echo "     yuhuang-ctl switch"
-echo "     或在 fcitx5-configtool 中添加 YuHuang"
+echo "  1. 在任意输入框中使用现有输入法："
+echo "     按住 Pause 开始录音，松开后输入文本"
 echo ""
 echo "  2. 配置 LLM (可选):"
-echo "     fcitx5-configtool → 附加组件 → YuHuang → 配置"
+echo "     KDE 应用菜单 → Aoide 设置 → 附加组件 → Aoide → 配置"
 echo "     或编辑 ~/.config/yuhuang/config.yaml"
 echo ""
-echo "  3. 使用: 按住右 Ctrl → 说话 → 松开 → 文字上屏"
+echo "  3. 使用: 按住 Pause → 说话 → 松开 → 文字上屏"
 echo ""
 echo "  📋 后端日志: tail -f ~/.config/yuhuang/backend.log"
-echo "  🎤 查看麦克风: yuhuang-ctl mic"
-echo "  🔄 重启后端: yuhuang-ctl restart"
-echo "  ⏹  停止后端: yuhuang-ctl stop"
-echo "  ⚙  fcitx5 配置: fcitx5-configtool → 附加组件 → YuHuang → 配置"
+echo "  🎤 查看麦克风: aoide-ctl mic"
+echo "  🔄 重启后端: aoide-ctl restart"
+echo "  ⏹  停止后端: aoide-ctl stop"
+echo "  ⚙  fcitx5 配置: fcitx5-configtool → 附加组件 → Aoide → 配置"
 echo ""

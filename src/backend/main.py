@@ -1,4 +1,4 @@
-"""YuHuang backend service entry point"""
+"""Aoide backend service entry point"""
 import asyncio
 import signal
 import sys
@@ -140,7 +140,7 @@ def load_config(config_path: str) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="YuHuang Backend Service")
+    parser = argparse.ArgumentParser(description="Aoide Backend Service")
     parser.add_argument("-c", "--config",
                         default=os.path.expanduser("~/.config/yuhuang/config.yaml"),
                         help="Config file path")
@@ -162,7 +162,7 @@ def main():
         "socket_path", "/tmp/yuhuang-backend.sock")
 
     logger.info("=" * 50)
-    logger.info("YuHuang Backend v0.2.0")
+    logger.info("Aoide Backend v0.2.0")
     logger.info("=" * 50)
 
     # ---- Init modules ----
@@ -171,7 +171,8 @@ def main():
     llm_config = config.get("llm", {})
     release_only = config.get("pipeline", {}).get("commit_on_release", True)
     frontend = SpeechFrontend(denoise=config.get("audio", {}).get("noise_suppression", True)) if release_only else None
-    cloud_config = config.get("cloud_asr", {})
+    yaml_cloud_config = config.get("cloud_asr", {})
+    cloud_config = yaml_cloud_config
     cloud_asr = CloudASR(cloud_config) if cloud_config.get("enabled", False) and release_only else None
     cloud_denoiser = None
     if cloud_asr:
@@ -253,6 +254,7 @@ def main():
     _finishing = False
     _last_mic_notice = float("-inf")
     _stream = None  # streaming cloud session of the current key press
+    pending_cloud_config = None
 
     # ---- Callbacks ----
 
@@ -276,6 +278,52 @@ def main():
         session, _stream = _stream, None
         if session is not None:
             await session.abort()
+
+    async def _apply_cloud_config():
+        """Install GUI cloud settings between utterances, preserving YAML extras."""
+        nonlocal pending_cloud_config, cloud_asr, cloud_denoiser, cloud_config
+        if pending_cloud_config is None:
+            return
+        updated = dict(yaml_cloud_config)
+        if not pending_cloud_config.get("use_yaml"):
+            provider = pending_cloud_config.get("provider", updated.get("provider", "openai"))
+            if provider.startswith("elevenlabs"):
+                updated.update({key: value for key, value in pending_cloud_config.items()
+                                if key not in ("api_key", "model", "realtime_model")})
+                eleven = dict(updated.get("elevenlabs") or {})
+                for key in ("api_key", "model", "realtime_model"):
+                    if key in pending_cloud_config:
+                        eleven[key] = pending_cloud_config[key]
+                updated["elevenlabs"] = eleven
+            else:
+                updated.update(pending_cloud_config)
+        if updated == cloud_config:
+            pending_cloud_config = None
+            return
+        try:
+            candidate = CloudASR(updated) if updated.get("enabled") and release_only else None
+        except (TypeError, ValueError) as exc:
+            logger.error("Cloud settings rejected: %s", exc)
+            pending_cloud_config = None
+            return
+        denoiser = None
+        if candidate:
+            try:
+                denoiser = CloudDenoiser(updated.get("denoise", "none"),
+                                         updated.get("denoise_options") or {})
+            except Exception as exc:
+                await candidate.close()
+                logger.error("Cloud settings rejected: %s", exc)
+                return
+        old_asr, old_denoiser = cloud_asr, cloud_denoiser
+        cloud_asr, cloud_denoiser, cloud_config = candidate, denoiser, updated
+        pending_cloud_config = None
+        if old_asr:
+            await old_asr.close()
+        if old_denoiser is not None:
+            old_denoiser.close()
+        logger.info("Cloud ASR settings applied: enabled=%s provider=%s draft=%s",
+                    bool(cloud_asr), updated.get("provider"), updated.get("draft"))
 
     def _to_cloud(pcm):
         """Feed the cloud path (optional denoise); never blocks on the network."""
@@ -326,6 +374,7 @@ def main():
                 "start_listening ignored: already listening "
                 "(duplicate PTT press, release event likely lost)")
             return
+        await _apply_cloud_config()
         try:
             await audio_capture.follow_default_device()
         except Exception as exc:
@@ -468,8 +517,13 @@ def main():
         await _pipeline.commit_now()
 
     async def on_config(cmd: dict):
-        """Handle config update from fcitx5 plugin (LLM + audio device)"""
-        nonlocal llm_optimizer
+        """Handle config update from the fcitx5 addon."""
+        nonlocal llm_optimizer, pending_cloud_config
+
+        if isinstance(cmd.get("cloud_asr"), dict):
+            pending_cloud_config = cmd["cloud_asr"]
+            if not audio_capture.is_listening and not _finishing:
+                await _apply_cloud_config()
 
         llm_cfg = cmd.get("llm", {}) if addon_llm_override else {}
 
@@ -582,7 +636,7 @@ def main():
 
         logger.info(f"Unix socket listening on: {socket_path}")
         logger.info("Audio capture started")
-        logger.info("YuHuang Backend is ready!")
+        logger.info("Aoide Backend is ready!")
         logger.info("")
         if _watchdog_proc:
             logger.info(

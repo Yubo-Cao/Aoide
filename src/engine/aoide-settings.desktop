@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Aoide Settings
+Name[zh_CN]=Aoide 设置
+Name[zh_TW]=Aoide 設定
+GenericName=Voice Input Settings
+GenericName[zh_CN]=语音输入设置
+Comment=Open Input Method settings, then Addons → Aoide
+Comment[zh_CN]=打开输入法设置，在“附加组件”中选择“Aoide”
+Exec=systemsettings kcm_fcitx5
+TryExec=systemsettings
+Icon=fcitx
+Categories=Settings;
+OnlyShowIn=KDE;

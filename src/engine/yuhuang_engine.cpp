@@ -9,6 +9,7 @@
 #include <fcitx/event.h>
 #include <fcitx-utils/capabilityflags.h>
 #include <fcitx-config/iniparser.h>
+#include <nlohmann/json.hpp>
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -146,24 +147,43 @@ void YuHuangEngine::sendConfigToBackend() {
     double vadTimeout = config_.vadSilenceTimeoutMs.value() / 1000.0;
     double interInterval = config_.asrIntermediateInterval.value() / 1000.0;
 
-    std::string cmd =
-        R"({"type":"config","llm":)" + std::string(R"({)")
-        + R"("enabled":)" + (config_.llmEnabled.value() ? "true" : "false")
-        + R"(,"base_url":")" + config_.llmBaseUrl.value() + R"(")"
-        + R"(,"api_key":")" + config_.llmApiKey.value() + R"(")"
-        + R"(,"model":")" + config_.llmModel.value() + R"(")"
-        + R"(,"temperature":)" + std::to_string(tempVal)
-        + R"(,"max_tokens":)" + std::to_string(config_.llmMaxTokens.value())
-        + R"(,"optimize_delay":)" + std::to_string(optDelay)
-        + R"(,"auto_commit_delay":)" + std::to_string(commitDelay)
-        + R"(})"
-        + R"(,"vad":)" + std::string(R"({)")
-        + R"("silence_timeout":)" + std::to_string(vadTimeout)
-        + R"(,"intermediate_interval":)" + std::to_string(interInterval)
-        + R"(})"
-        + R"(,"audio_device":")" + config_.audioDevice.value() + R"(")"
-        + R"(})";
-    backend_->sendCommand(cmd);
+    nlohmann::json cmd = {
+        {"type", "config"},
+        {"llm", {
+            {"enabled", config_.llmEnabled.value()},
+            {"base_url", config_.llmBaseUrl.value()},
+            {"api_key", config_.llmApiKey.value()},
+            {"model", config_.llmModel.value()},
+            {"temperature", tempVal},
+            {"max_tokens", config_.llmMaxTokens.value()},
+            {"optimize_delay", optDelay},
+            {"auto_commit_delay", commitDelay},
+        }},
+        {"vad", {
+            {"silence_timeout", vadTimeout},
+            {"intermediate_interval", interInterval},
+        }},
+        {"audio_device", config_.audioDevice.value()},
+    };
+    if (config_.cloudASROverride.value()) {
+        constexpr const char *providers[] = {
+            "openai", "openai-realtime", "elevenlabs", "elevenlabs-realtime"
+        };
+        cmd["cloud_asr"] = {
+            {"enabled", config_.cloudASREnabled.value()},
+            {"provider", providers[static_cast<int>(config_.cloudASRProvider.value())]},
+            {"draft", config_.cloudASRDraft.value() == CloudDraft::Cloud ? "cloud" : "local"},
+        };
+        if (!config_.cloudASRApiKey.value().empty())
+            cmd["cloud_asr"]["api_key"] = config_.cloudASRApiKey.value();
+        if (!config_.cloudASRModel.value().empty())
+            cmd["cloud_asr"]["model"] = config_.cloudASRModel.value();
+        if (!config_.cloudASRRealtimeModel.value().empty())
+            cmd["cloud_asr"]["realtime_model"] = config_.cloudASRRealtimeModel.value();
+    } else {
+        cmd["cloud_asr"] = {{"use_yaml", true}};
+    }
+    backend_->sendCommand(cmd.dump());
 }
 
 // 断连时尝试重连一次。已连接则什么都不做，返回当前是否已连上。

@@ -37,6 +37,8 @@ namespace vk {
 // Toggle = 按一下开始、再按一下结束（Free3 等脉冲式蓝牙小键盘：
 //          按下即发 press+release 脉冲，物理上无法表达"按住"）
 FCITX_CONFIG_ENUM(PttMode, Hold, Toggle);
+FCITX_CONFIG_ENUM(CloudProvider, OpenAI, OpenAIRealtime, ElevenLabs, ElevenLabsRealtime);
+FCITX_CONFIG_ENUM(CloudDraft, Local, Cloud);
 
 // ===== 配置类 (fcitx5-configtool GUI 可编辑) =====
 // 注意: double/float 非 fcitx5 原生支持, 时间值用 int (毫秒) 存储
@@ -153,6 +155,30 @@ FCITX_CONFIGURATION(YuHuangConfig,
     fcitx::Option<int, fcitx::IntConstrain> llmMaxTokens{
         this, "LLMMaxTokens", "LLM max output tokens", 2000,
         fcitx::IntConstrain(64, 8192)
+    };
+
+    // Cloud recognition is normally configured in config.yaml. Keep that file
+    // authoritative until the user explicitly opts into managing it here.
+    fcitx::Option<bool> cloudASROverride{
+        this, "CloudASROverride", "Use cloud settings below (off: backend config.yaml)", false
+    };
+    fcitx::Option<bool> cloudASREnabled{
+        this, "CloudASREnabled", "Enable cloud recognition", false
+    };
+    fcitx::Option<CloudProvider> cloudASRProvider{
+        this, "CloudASRProvider", "Final transcript provider", CloudProvider::OpenAI
+    };
+    fcitx::Option<CloudDraft> cloudASRDraft{
+        this, "CloudASRDraft", "Live draft source", CloudDraft::Local
+    };
+    fcitx::Option<std::string> cloudASRApiKey{
+        this, "CloudASRApiKey", "Cloud API key (env:VARIABLE; empty keeps YAML value)", ""
+    };
+    fcitx::Option<std::string> cloudASRModel{
+        this, "CloudASRModel", "Batch transcription model (empty keeps YAML value)", ""
+    };
+    fcitx::Option<std::string> cloudASRRealtimeModel{
+        this, "CloudASRRealtimeModel", "Realtime model (empty keeps YAML value)", ""
     };
 )
 

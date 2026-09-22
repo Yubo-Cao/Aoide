@@ -1,6 +1,7 @@
 [Addon]
-Name=YuHuang
-Name[zh_CN]=语音输入法
+Name=Aoide
+Name[zh_CN]=Aoide
+Name[zh_TW]=Aoide
 Category=Module
 Version=@PROJECT_VERSION@
 Library=yuhuang

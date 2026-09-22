@@ -1,4 +1,4 @@
-"""YuHuang Backend — 硬内存限制守护进程
+"""Aoide Backend — 硬内存限制守护进程
 
 作为独立子进程运行，监控后端主进程的 RSS 内存占用。
 当超过限制时，立即 SIGKILL 主进程并发送桌面通知。
@@ -86,7 +86,7 @@ def watchdog(pid: int, limit_mb: int, restart_cmd: list[str] | None = None):
 
         # 1) 尝试发送桌面通知（SIGKILL 之前）
         send_notification(
-            title="⚠️ YuHuang 内存超限 — 正在强制重启",
+            title="⚠️ Aoide 内存超限 — 正在强制重启",
             body=(
                 f"后端进程已使用 {rss_mb}MB 内存\n"
                 f"超过限制 {limit_mb}MB\n\n"
@@ -116,7 +116,7 @@ def watchdog(pid: int, limit_mb: int, restart_cmd: list[str] | None = None):
 
         # 4) 提交 issue 弹窗
         send_notification(
-            title="🔍 YuHuang 内存超限 — 是否提交 Issue？",
+            title="🔍 Aoide 内存超限 — 是否提交 Issue？",
             body=(
                 f"后端因内存超限 ({rss_mb}MB > {limit_mb}MB) "
                 f"被守护进程强制重启。\n"
@@ -131,7 +131,7 @@ def watchdog(pid: int, limit_mb: int, restart_cmd: list[str] | None = None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="YuHuang Memory Watchdog — 硬内存限制守护进程"
+        description="Aoide Memory Watchdog — 硬内存限制守护进程"
     )
     parser.add_argument(
         "--pid",
