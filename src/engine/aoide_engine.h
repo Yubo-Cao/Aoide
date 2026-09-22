@@ -50,7 +50,7 @@ FCITX_CONFIGURATION(AoideConfig,
     // 是两个不同的 Key——所以"不管先按哪个都行"必须靠列表表达。
     fcitx::KeyListOption triggerKey{
         this, "TriggerKey", "Trigger key",
-        fcitx::KeyList{fcitx::Key("Pause")},
+        fcitx::KeyList{fcitx::Key("Control+Alt+Y")},
         fcitx::KeyListConstrain(
             fcitx::KeyConstrainFlags{}
             | fcitx::KeyConstrainFlag::AllowModifierOnly

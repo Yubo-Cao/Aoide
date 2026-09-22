@@ -193,6 +193,7 @@ if [ -f "$HOME/.config/fcitx5/conf/aoide.conf" ]; then
     sed -i -e 's|/tmp/yuhuang-backend.sock|auto|g' \
         -e 's|YUHUANG_OPENAI_API_KEY|AOIDE_OPENAI_API_KEY|g' \
         -e 's|YUHUANG_ELEVENLABS_API_KEY|AOIDE_ELEVENLABS_API_KEY|g' \
+        -e 's|^0=Control+Shift+Q$|0=Control+Alt+Y|g' \
         "$HOME/.config/fcitx5/conf/aoide.conf"
 fi
 if [ -f "$HOME/.config/aoide/config.yaml" ]; then
@@ -555,7 +556,10 @@ fi
 
 echo ""
 echo -e "${CYAN}═══ 刷新输入法 ═══${NC}"
-if command -v fcitx5 &>/dev/null; then
+if systemctl --user cat fcitx5.service &>/dev/null; then
+    systemctl --user restart fcitx5.service && echo -e "  ${GREEN}✓${NC} fcitx5 已刷新，Aoide 已就绪" || \
+        echo -e "  ${YELLOW}○${NC} fcitx5 用户服务未能启动，请检查 systemctl --user status fcitx5${NC}"
+elif command -v fcitx5 &>/dev/null; then
     fcitx5 -r -d 2>/dev/null && echo -e "  ${GREEN}✓${NC} fcitx5 已刷新，Aoide 已就绪" || \
         echo -e "  ${YELLOW}○${NC} fcitx5 未运行，启动后生效${NC}"
 fi
@@ -576,14 +580,14 @@ fi
 echo "快速使用:"
 echo ""
 echo "  1. 在任意输入框中使用现有输入法："
-echo "     按住 Pause 开始录音，松开后输入文本"
+echo "     按住 Ctrl+Alt+Y 开始录音，松开后输入文本"
 echo ""
 echo "  2. 配置密钥、词典和输入选项:"
 echo "     KDE 应用菜单 → Aoide 设置"
 echo "     输入选项在窗口中打开 KDE 输入法设置 → 附加组件 → Aoide → 配置"
 echo "     或编辑 ~/.config/aoide/config.yaml"
 echo ""
-echo "  3. 使用: 按住 Pause → 说话 → 松开 → 文字上屏"
+echo "  3. 使用: 按住 Ctrl+Alt+Y → 说话 → 松开 → 文字上屏"
 echo ""
 echo "  📋 后端日志: tail -f ~/.config/aoide/backend.log"
 echo "  🎤 查看麦克风: aoide-ctl mic"

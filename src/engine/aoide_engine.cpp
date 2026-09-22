@@ -109,9 +109,9 @@ void AoideEngine::applyConfig() {
     // TriggerKey/0=...），于是静默变成空列表。宁可退回默认键并且吵一声，
     // 也不要让用户对着一个永远不响应的输入法。
     if (triggerKeys_.empty()) {
-        triggerKeys_ = fcitx::KeyList{fcitx::Key("Pause")};
+        triggerKeys_ = fcitx::KeyList{fcitx::Key("Control+Alt+Y")};
         std::cerr << "[Aoide] WARNING: TriggerKey is empty -- falling back "
-                     "to Pause. A scalar 'TriggerKey=<key>' from an older "
+                     "to Control+Alt+Y. A scalar 'TriggerKey=<key>' from an older "
                      "config is not read as a list; write 'TriggerKey/0=<key>' "
                      "instead, or set it once in fcitx5-configtool."
                   << std::endl;
