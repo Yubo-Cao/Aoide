@@ -218,6 +218,7 @@ public:
     void commitSmart(const std::string &text);    // commit 分通道
     void replaceSmart(int delChars, const std::string &text,
                       const std::string &fallback);  // replace 分通道
+    void commitAfterFocusLoss(const std::string &text, const std::string &fallback);
     void resetSmart();                     // reset + 清空假上屏
 
     // ★ 打断收尾提交：假上屏通道把 fakeCommitted + 剩余拼接真上屏；
@@ -331,7 +332,7 @@ private:
     PttMode triggerMode_ = PttMode::Hold;
     bool isRecording_ = false;
     bool isFinalizing_ = false;
-    bool discardPendingResult_ = false;
+    bool focusMovedDuringRecording_ = false;
     bool triggerHeld_ = false;
     fcitx::Key heldTrigger_;
     // X11-style key auto-repeat arrives as a release immediately followed by a

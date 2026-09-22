@@ -190,6 +190,18 @@ inline void YuHuangState::replaceSmart(int delChars, const std::string &text,
     }
 }
 
+inline void YuHuangState::commitAfterFocusLoss(const std::string &text,
+                                                const std::string &fallback) {
+    // The old cursor may have moved. Keep the original input context, but
+    // never delete surrounding text after it loses focus.
+    if (usePreeditChannel()) {
+        clearFakePreedit();
+        commitText(text);
+    } else {
+        commitText(fallback);
+    }
+}
+
 inline void YuHuangState::resetSmart() {
     clearFakePreedit();
     reset();

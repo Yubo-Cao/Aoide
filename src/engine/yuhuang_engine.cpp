@@ -248,11 +248,6 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
                 releasePendingKey();
                 return;
             }
-            if (discardPendingResult_ && (type == "replace" || type == "commit" ||
-                    type == "preedit" || type == "interrupt_commit")) {
-                return;
-            }
-
             YuHuangState *state = currentState();
             if (!state) {
                 std::cout << "[YuHuang] currentState() returned nullptr!" << std::endl;
@@ -313,7 +308,11 @@ YuHuangEngine::YuHuangEngine(fcitx::Instance *instance)
                         delChars = 0;
                     }
                 }
-                state->replaceSmart(delChars, text, fallback);
+                if (focusMovedDuringRecording_) {
+                    state->commitAfterFocusLoss(text, fallback);
+                } else {
+                    state->replaceSmart(delChars, text, fallback);
+                }
                 std::cout << "[YuHuang] replace: delete=" << delChars
                           << " text=" << text.size() << "B"
                           << " preedit_channel=" << state->usePreeditChannel()
@@ -510,13 +509,12 @@ void YuHuangEngine::onFocusOut(fcitx::InputContextEvent &event) {
     if (event.inputContext() != recordingIc_.get()) return;
     triggerHeld_ = false;
     triggerReleasePending_ = false;
+    focusMovedDuringRecording_ = true;
     if (isRecording_) {
-        logPtt("PTT: focus lost while recording -> interrupt");
-        interruptListening();  // 焦点打断：无暂扣按键，只润色剩余收尾
+        logPtt("PTT: focus lost while recording -> finalize on original input context");
+        stopListening();
     } else if (isFinalizing_) {
-        discardPendingResult_ = true;
-        if (auto *state = currentState()) state->resetSmart();
-        logPtt("PTT: focus lost during final recognition -> discard pending output");
+        logPtt("PTT: focus lost during final recognition -> keep pending output");
     }
 }
 
@@ -535,7 +533,7 @@ void YuHuangEngine::startListening() {
     // ★ 钉住本次录音的目标 IC：之后后端的所有 preedit/commit/replace
     // 都打到这个窗口，即使录音中用户用鼠标把焦点点走
     recordingIc_ = ic->watch();
-    discardPendingResult_ = false;
+    focusMovedDuringRecording_ = false;
     auto *state = ic->propertyFor(&factory_);
     state->resetSmart();
     if (!tryReconnect()) {
