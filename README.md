@@ -1,59 +1,70 @@
 # 聆序 · Aoide
 
-聆序（Aoide）是 Linux 上的 fcitx5 语音输入附加组件。按住触发键说话，文字在光标附近预览；松键后识别终稿并输入到原输入框。它与拼音等输入法共存，无需切换输入法。
+**按住说话，松手成文。**
 
-项目从 [Homio/YuHuang](https://github.com/Homio/YuHuang) 派生，保留原项目的 MIT 版权声明。Aoide 由 Yubo-Cao 独立维护。
+聆序是 Linux 上的 fcitx5 语音输入附加组件。它与拼音等输入法共存：在支持 fcitx5 的文本框按住快捷键说话，松开后将识别结果输入到原输入框。录音时可预览草稿；预览位置由应用提供的光标坐标和 fcitx5 面板决定。
 
-## 功能
+**聆序**是中文显示名，**Aoide** 是英文名，也是仓库、命令和配置路径使用的名称。项目由 Yubo-Cao 独立维护，基于 [Homio/YuHuang](https://github.com/Homio/YuHuang) 的 MIT 授权代码继续开发。
 
-- **实时预览**：录音时显示语音草稿。X11 下可使用 Cairo/Pango 悬浮窗；其他环境回退到 fcitx5 候选栏。行宽、行数和字号可在图形设置中调整。
-- **本地或云端识别**：本地使用 FunASR；可选 OpenAI 或 ElevenLabs 的批量、实时识别。云端失败时可回退本地。启用云端识别会将音频发送到所选服务。
-- **可选 LLM 整理**：删除口头禅与重复，理顺句间逻辑；确有并列事项或步骤时输出 Markdown 列表。保留专有名词、数字及已有省略号。可通过个人词典指定术语；如果整理结果丢失关键内容或词典标准词，使用原识别文本。
-- **焦点切换保护**：录音期间切换窗口会结束录音，并把结果提交到开始录音时的输入框。
-- **KDE 配置入口**：应用菜单中的“聆序设置”（英文界面为“Aoide Settings”）可管理 API 密钥和个人词典，并打开 fcitx5 的聆序附加组件配置，调整触发键、麦克风、预览和识别选项。独立设置窗口提供简体中文和英文界面，按系统语言选择（也可设置 `AOIDE_UI_LANG=zh` 或 `en`）；KDE 附加组件配置项同时显示中英文名称。
+## 快速上手
 
-默认触发键为 **Ctrl+Alt+Y**。按住说话，松开后等待终稿。可在 KDE 输入法设置中修改。整理模型只能依据识别文本判断停顿；原文没有停顿信息时，它无法准确补出省略号。
-
-## 安装
-
-目前安装脚本面向 Ubuntu 24.04 和 fcitx5，要求 Python 3.11+、麦克风以及构建 C++ 插件所需的开发包。脚本会安装缺失的 apt 依赖、创建 Python 虚拟环境、编译插件并启动用户服务。首次启动本地模型可能需要下载较大的模型文件。
+目前 `install.sh` 面向 **Ubuntu 24.04 + fcitx5**，需要 Python 3.11+、麦克风和编译 C++ 插件所需的开发包。脚本会安装缺失的 apt 依赖、建立 Python 虚拟环境、安装插件并启动用户服务。首次使用本地识别时，模型可能需要下载。
 
 ```bash
+git clone https://github.com/Yubo-Cao/Aoide.git
+cd Aoide
 ./install.sh install
 ```
 
-安装后在 KDE 应用菜单搜索 **聆序设置**，管理密钥与个人词典。窗口中的“打开 KDE 输入法设置”会进入 fcitx5 设置；在 **附加组件 → 聆序 → 配置** 调整录音键、预览窗、LLM 和云端识别。云端设置默认沿用 YAML；勾选 **覆盖 YAML 云端配置** 后才用图形设置覆盖对应选项。
+安装后：
 
-高级设置在 `~/.config/aoide/config.yaml`。例如可配置降噪、识别模型和云端服务的超时。配置模板见 [conf/config.yaml](conf/config.yaml)。API 密钥由聆序设置窗口存入桌面密码库（Secret Service）；旧的 `env:VARIABLE` 配置仍可用。新安装的 socket 位于 `$XDG_RUNTIME_DIR/aoide/backend.sock`；旧配置里的 `/tmp/yuhuang-backend.sock` 会自动映射到新路径。
+1. 在文本框中**按住 Ctrl+Alt+Y** 说话，松开后等待文字上屏。这个快捷键可在 KDE 输入法设置中修改。
+2. 在 KDE 应用菜单打开 **聆序设置**，管理 API 密钥和个人词典。
+3. 如需调整快捷键、麦克风、预览、云端识别或大模型整理，点击窗口中的 **打开 KDE 输入法设置**，再进入 **附加组件 → 聆序 → 配置**。
+
+设置窗口提供简体中文和英文界面，按系统语言选择；也可用 `AOIDE_UI_LANG=zh` 或 `AOIDE_UI_LANG=en` 指定语言。fcitx5 的聆序配置项同时显示中英文名称。
+
+## 能做什么
+
+- **实时预览**：录音时显示识别草稿。Wayland 使用 fcitx5 候选面板；X11 可使用 Cairo/Pango 悬浮窗。预览行宽、行数和字号可以调整。
+- **本地与云端识别**：本地使用 FunASR；可选 OpenAI 或 ElevenLabs 的批量或实时识别。云端识别失败时可配置回退到本地。
+- **可选的大模型整理**：去掉口头禅和重复，理顺句间逻辑；确有并列事项或步骤时可整理为 Markdown 列表。个人词典可固定专有名词和别名。数字、既有省略号或词典标准词被错误改动时，原识别文本会作为回退。
+- **焦点切换保护**：说话期间切换窗口会结束本次录音，并尝试把结果提交到开始录音时的输入框。
+
+默认在松键后一次性提交。高级配置也支持增量提交，让稳定的前缀先上屏。模型只能依据识别文本处理停顿；原文没有停顿信息时，无法准确补出省略号。
+
+## 配置与数据
+
+| 位置 | 用途 |
+| --- | --- |
+| **聆序设置**（英文界面：**Aoide Settings**） | 将 OpenAI、ElevenLabs 和整理模型的 API 密钥存入桌面密码库（Secret Service）；查看、编辑个人词典。 |
+| **KDE 输入法设置 → 附加组件 → 聆序** | 设置触发键、预览、识别服务和大模型。云端设置只有勾选 **覆盖 YAML 云端配置** 后才覆盖后端 YAML。 |
+| `~/.config/aoide/config.yaml` | 设置本地模型、降噪、超时等高级参数；模板见 [conf/config.yaml](conf/config.yaml)。 |
+| `~/.config/aoide/dictionary.yaml` | 保存词典中的标准写法和别名；下次录音时自动读取。 |
+
+本地识别在本机运行。启用云端识别后，音频会发给所选服务；启用远程大模型整理后，识别文本及用于衔接的上下文会发给所配置的模型服务。密钥可通过设置窗口存入密码库，旧的 `env:VARIABLE` 配置仍可兼容。
+
+后端 socket 默认位于 `$XDG_RUNTIME_DIR/aoide/backend.sock`。从旧版升级时，安装脚本会迁移用户配置和词典；旧配置里的 `/tmp/yuhuang-backend.sock` 会映射到新地址。命令入口和用户服务分别为 `aoide-ctl`、`aoide-backend` 和 `aoide-backend.service`。
 
 ```bash
-aoide-ctl status
-aoide-ctl mic
-aoide-ctl restart
+aoide-ctl status   # 检查后端和插件
+aoide-ctl mic      # 查看麦克风
+aoide-ctl restart  # 重启后端
 ```
 
-`aoide-backend` 可用于前台运行后端，`aoide-ctl` 管理服务。升级安装会把旧配置、词典和服务迁移到 `~/.config/aoide/` 与 `aoide-backend.service`；词典表格保存在 `~/.config/aoide/dictionary.yaml`，下次录音时自动载入。
-
-## 工作流程
-
-1. 在文本框中按住 Ctrl+Alt+Y，预览框随录音更新。
-2. 松键后，本地或所选云端识别器生成终稿。
-3. 如果启用了 LLM 整理，后端根据识别文本与个人词典处理标点和术语。
-4. 文字通过 fcitx5 输入到开始录音时的文本框。录音中途切换焦点会提前执行同一收尾流程。
-
-默认在松键后一次性提交。可在后端配置中启用增量提交；稳定前缀会先上屏，尾部继续修正。
-
 ## 手动构建
+
+其他发行版需要自行安装 fcitx5 开发库、CMake、音频库与 Python 依赖，并配置用户服务。插件和 Python 包可分别构建：
 
 ```bash
 cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j4
 sudo cmake --install build
 python3 -m venv .venv
-.venv/bin/pip install -e .
+.venv/bin/pip install -e '.[gui]'
 ```
 
-安装脚本还会配置用户服务、默认配置和命令入口。手动安装需要自行完成这些步骤。
+手动构建还需自行安装 `systemd/aoide-backend.service.in` 对应的用户服务、创建配置文件，并将命令入口加入 `PATH`；上面的命令本身不会完成这些步骤。
 
 ## 卸载
 
@@ -61,8 +72,8 @@ python3 -m venv .venv
 ./install.sh uninstall
 ```
 
-卸载会移除用户配置与该脚本记录的依赖；先备份需要保留的词典、密钥和 YAML 配置。
+卸载脚本会移除用户配置及其记录的依赖。需要保留词典或 YAML 配置时，请先备份；桌面密码库中的密钥不会随配置目录删除，可在卸载前从聆序设置窗口移除。
 
 ## 许可证与致谢
 
-[MIT License](LICENSE)。感谢原项目 [Homio/YuHuang](https://github.com/Homio/YuHuang)，以及 [fcitx5](https://github.com/fcitx/fcitx5)、[FunASR](https://github.com/modelscope/FunASR) 和 [SenseVoice](https://github.com/FunAudioLLM/SenseVoice)。
+本项目采用 [MIT License](LICENSE)，保留原项目的版权声明。感谢 [Homio/YuHuang](https://github.com/Homio/YuHuang)、[fcitx5](https://github.com/fcitx/fcitx5)、[FunASR](https://github.com/modelscope/FunASR) 和 [SenseVoice](https://github.com/FunAudioLLM/SenseVoice)。
