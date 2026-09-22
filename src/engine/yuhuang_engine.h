@@ -334,6 +334,12 @@ private:
     bool discardPendingResult_ = false;
     bool triggerHeld_ = false;
     fcitx::Key heldTrigger_;
+    // X11-style key auto-repeat arrives as a release immediately followed by a
+    // press with the same timestamp. A trigger release is only acted on once
+    // this short timer expires without such a press.
+    std::unique_ptr<fcitx::EventSourceTime> triggerReleaseTimer_;
+    bool triggerReleasePending_ = false;
+    uint64_t triggerReleaseTime_ = 0;
     uint64_t recordingStartTime_ = 0;  // ★ PTT 按下的事件时间（打断去抖基准，同 keyEvent.time() 的 int 语义，用无符号避免回绕）
     uint64_t lastToggleTime_ = 0;  // ★ Toggle 模式去抖：上次 toggle 动作时间（防键盘自动重复 / Free3 脉冲连发误触发）
 

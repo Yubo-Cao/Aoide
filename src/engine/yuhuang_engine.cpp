@@ -355,6 +355,14 @@ YuHuangEngine::~YuHuangEngine() {
 
 // ---- ★ 全局事件处理（addon 模式，PreInputMethod 阶段）----
 
+namespace {
+// Auto-repeat pairs share one timestamp and arrive back to back; 30 ms covers
+// that with room to spare while adding no noticeable delay to a real release.
+constexpr uint64_t kTriggerReleaseGraceUs = 30000;
+// The two halves of a synthetic auto-repeat pair carry the same event time.
+constexpr uint64_t kAutoRepeatPairSkewMs = 5;
+} // namespace
+
 void YuHuangEngine::onGlobalKey(fcitx::KeyEvent &keyEvent) {
     const fcitx::Key &key = keyEvent.key();
     bool isRelease = keyEvent.isRelease();
@@ -368,9 +376,22 @@ void YuHuangEngine::onGlobalKey(fcitx::KeyEvent &keyEvent) {
             ? heldTrigger_.code() == raw.code()
             : lower(heldTrigger_.sym()) == lower(raw.sym());
         if (isRelease && mainKey) {
-            triggerHeld_ = false;
-            stopListening();
             keyEvent.filterAndAccept();
+            // Some clients deliver auto-repeat as release+press pairs. Acting
+            // on the release at once ended the recording, and the paired
+            // press started an empty one, over and over while the key stayed
+            // down. Wait briefly for that press before trusting the release.
+            triggerReleasePending_ = true;
+            triggerReleaseTime_ = static_cast<uint64_t>(keyEvent.time());
+            triggerReleaseTimer_ = instance_->eventLoop().addTimeEvent(
+                CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + kTriggerReleaseGraceUs, 1000,
+                [this](fcitx::EventSourceTime *, uint64_t) {
+                    if (!triggerReleasePending_) return true;
+                    triggerReleasePending_ = false;
+                    triggerHeld_ = false;
+                    stopListening();
+                    return true;
+                });
             return;
         }
         if (isRelease && key.isModifier() &&
@@ -379,7 +400,16 @@ void YuHuangEngine::onGlobalKey(fcitx::KeyEvent &keyEvent) {
             return; // Let the application see its modifier release.
         }
         if (!isRelease && mainKey) {
-            keyEvent.filterAndAccept(); // Auto-repeat must never start a new session.
+            // Auto-repeat, including the press half of a release+press pair,
+            // must never start a new session. Only a press stamped with (almost)
+            // the release's time cancels it; a genuine release is still honoured
+            // when the timer fires.
+            const uint64_t t = static_cast<uint64_t>(keyEvent.time());
+            const uint64_t gap = t > triggerReleaseTime_ ? t - triggerReleaseTime_ : triggerReleaseTime_ - t;
+            if (triggerReleasePending_ && gap <= kAutoRepeatPairSkewMs) {
+                triggerReleasePending_ = false;
+            }
+            keyEvent.filterAndAccept();
             return;
         }
     }
@@ -479,6 +509,7 @@ void YuHuangEngine::onFocusOut(fcitx::InputContextEvent &event) {
     // Fcitx has many input contexts; another window losing focus is unrelated.
     if (event.inputContext() != recordingIc_.get()) return;
     triggerHeld_ = false;
+    triggerReleasePending_ = false;
     if (isRecording_) {
         logPtt("PTT: focus lost while recording -> interrupt");
         interruptListening();  // 焦点打断：无暂扣按键，只润色剩余收尾

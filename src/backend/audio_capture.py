@@ -55,6 +55,8 @@ class AudioCapture:
         self._loop = None
         self._session = 0
         self.session_peak = 0
+        self._session_started = 0.0
+        self.session_duration = 0.0
 
         # ★ 回调频率监控
         self._callback_times = []  # 最近 _CALLBACK_RATE_WINDOW 秒内的回调时间戳
@@ -376,12 +378,15 @@ class AudioCapture:
         """按住触发键 → 开始接收音频"""
         self._session += 1
         self.session_peak = 0
+        self._session_started = time.monotonic()
+        self.session_duration = 0.0
         self._listening = True
         logger.info("🎤 PTT: START")
 
     def stop_listening(self):
         """松开触发键 → 停止接收"""
         self._listening = False
+        self.session_duration = time.monotonic() - self._session_started
         logger.info("🎤 PTT: STOP")
 
     # ── 音频转发循环 (在 event loop 中运行) ──────────

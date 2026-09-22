@@ -28,6 +28,11 @@ from backend.speech_frontend import SpeechFrontend
 from backend.cloud_asr import CloudASR
 from backend.audio_denoise import CloudDenoiser
 
+# Silence shorter than this is a too-short press, not a dead microphone.
+MIC_SILENCE_MIN_SECONDS = 0.5
+# At most one "no microphone signal" desktop notification per interval.
+MIC_NOTICE_INTERVAL = 300.0
+
 logger = logging.getLogger("yuhuang")
 
 
@@ -246,6 +251,7 @@ def main():
     _pipeline = PTTPipeline(server, llm_optimizer, commit_on_release=release_only,
                             result_store=ResultStore())
     _finishing = False
+    _last_mic_notice = float("-inf")
     _stream = None  # streaming cloud session of the current key press
 
     # ---- Callbacks ----
@@ -360,15 +366,26 @@ def main():
     async def _finish_impl(interrupt: bool):
         audio_capture.stop_listening()
         await audio_capture.drain_pending()
+        nonlocal _last_mic_notice
         if audio_capture.session_peak == 0:
-            logger.warning("No microphone signal during PTT (all samples zero or missing)")
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "notify-send", "语皇：没有收到麦克风声音",
-                    "请检查默认麦克风的连接、电源和静音状态，或在系统设置中切换输入设备。")
-                await asyncio.wait_for(proc.wait(), timeout=2)
-            except (OSError, asyncio.TimeoutError):
-                logger.warning("Could not display microphone notification")
+            # A press shorter than this has not had time to deliver audio, so
+            # silence says nothing about the microphone. Key auto-repeat that
+            # arrives as release/press pairs used to produce dozens of these.
+            if audio_capture.session_duration < MIC_SILENCE_MIN_SECONDS:
+                logger.info("PTT too short to judge the microphone (%.2fs)",
+                            audio_capture.session_duration)
+            else:
+                logger.warning("No microphone signal during %.1fs PTT (all samples zero or missing)",
+                               audio_capture.session_duration)
+                now = time.monotonic()
+                if now - _last_mic_notice >= MIC_NOTICE_INTERVAL:
+                    _last_mic_notice = now
+                    try:
+                        proc = await asyncio.create_subprocess_exec(
+                            "notify-send", "语皇：麦克风没有声音", "请检查麦克风是否静音或选错了设备。")
+                        await asyncio.wait_for(proc.wait(), timeout=2)
+                    except (OSError, asyncio.TimeoutError):
+                        logger.warning("Could not display microphone notification")
         if release_only:
             if asr_engine:
                 await asr_engine.stop_processing()
