@@ -106,6 +106,15 @@ llm:
   optimize_delay: 0.5
   # Delay before auto-committing after LLM completion (seconds)
   auto_commit_delay: 0.2
+  # Optional replacement for the built-in cleanup prompt (llm_optimizer._default_prompt),
+  # read at backend start; the addon does not override it. The prompt alone decides
+  # how fillers (嗯/呃/那个/就是说...) and hesitation ellipses (……嗯……) are removed and
+  # when to use Markdown lists. Whatever the prompt, the cleanup is discarded and the
+  # raw transcript committed if it drops more than 55% of the text, keeps under half
+  # of the English words, changes digits (leading "1." / "2)" list markers ignored),
+  # or omits a dictionary term; the log names the check that fired.
+  # system_prompt: |
+  #   You turn raw speech-recognition output ...
 
 # Cloud speech recognition (optional; used when pipeline.commit_on_release is true).
 # Audio leaves the machine only when enabled. Raw (not denoised) audio is sent;
