@@ -1,0 +1,271 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Aoide 0.2.0\n"
+"PO-Revision-Date: 2026-09-22 00:00+0000\n"
+"Last-Translator: Aoide contributors\n"
+"Language-Team: Spanish\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: es\n"
+
+msgid "Hold"
+msgstr "Mantener pulsado"
+
+msgid "Toggle"
+msgstr "Alternar"
+
+msgid "Local"
+msgstr "Local"
+
+msgid "Cloud"
+msgstr "En la nube"
+
+msgid "OpenAI batch (default: GPT-Transcribe)"
+msgstr "OpenAI por lotes (predeterminado: GPT-Transcribe)"
+
+msgid "OpenAI realtime (default: GPT-Live-Transcribe)"
+msgstr "OpenAI en tiempo real (predeterminado: GPT-Live-Transcribe)"
+
+msgid "ElevenLabs batch (default: Scribe v2)"
+msgstr "ElevenLabs por lotes (predeterminado: Scribe v2)"
+
+msgid "ElevenLabs realtime (default: Scribe v2 Realtime)"
+msgstr "ElevenLabs en tiempo real (predeterminado: Scribe v2 Realtime)"
+
+msgid "Push-to-talk key"
+msgstr "Tecla para hablar"
+
+msgid "Trigger mode (hold or toggle)"
+msgstr "Modo de activación (mantener o alternar)"
+
+msgid "Check system shortcut conflicts"
+msgstr "Comprobar conflictos con atajos del sistema"
+
+msgid "Backend socket path"
+msgstr "Ruta del socket del servicio"
+
+msgid "Microphone (blank uses default)"
+msgstr "Micrófono (vacío usa el predeterminado)"
+
+msgid "Silence timeout (ms)"
+msgstr "Tiempo de silencio (ms)"
+
+msgid "Live transcript interval (ms)"
+msgstr "Intervalo de transcripción en directo (ms)"
+
+msgid "Preview width (columns)"
+msgstr "Anchura de la vista previa (columnas)"
+
+msgid "Maximum preview lines"
+msgstr "Máximo de líneas de vista previa"
+
+msgid "Preview font size (points)"
+msgstr "Tamaño de letra de la vista previa (puntos)"
+
+msgid "Enable LLM text cleanup"
+msgstr "Activar la revisión de texto con IA"
+
+msgid "LLM API URL (OpenAI compatible)"
+msgstr "URL de la API de IA (compatible con OpenAI)"
+
+msgid "Legacy key reference"
+msgstr "Referencia de clave antigua"
+
+msgid "LLM model"
+msgstr "Modelo de IA"
+
+msgid "Cleanup delay (ms)"
+msgstr "Espera antes de revisar el texto (ms)"
+
+msgid "Auto-commit delay (ms)"
+msgstr "Espera antes de insertar el texto (ms)"
+
+msgid "LLM temperature (0–100; 30 means 0.30)"
+msgstr "Temperatura de IA (0–100; 30 equivale a 0,30)"
+
+msgid "LLM max output tokens"
+msgstr "Máximo de tokens de salida de IA"
+
+msgid "Override cloud YAML"
+msgstr "Reemplazar la configuración YAML de la nube"
+
+msgid "Enable cloud recognition"
+msgstr "Activar reconocimiento en la nube"
+
+msgid "Recognition service and mode"
+msgstr "Servicio y modo de reconocimiento"
+
+msgid "Live draft source"
+msgstr "Origen del borrador en directo"
+
+msgid "Legacy cloud key"
+msgstr "Clave antigua de la nube"
+
+msgid "Batch model (blank uses YAML)"
+msgstr "Modelo por lotes (vacío usa YAML)"
+
+msgid "Realtime model (blank uses YAML)"
+msgstr "Modelo en tiempo real (vacío usa YAML)"
+
+msgid "Aoide Settings"
+msgstr "Configuración de Aoide"
+
+msgid "API Keys"
+msgstr "Claves API"
+
+msgid "Personal Dictionary"
+msgstr "Diccionario personal"
+
+msgid "Input & Preview"
+msgstr "Entrada y vista previa"
+
+msgid "Keys are stored in your desktop password wallet (Secret Service). An empty field leaves the saved key unchanged. New keys are used on the next request; restart the backend after an authentication failure."
+msgstr "Las claves se guardan en el almacén de contraseñas del escritorio (Secret Service). Un campo vacío no modifica la clave guardada. Las claves nuevas se usan en la siguiente solicitud; reinicia el servicio si falló la autenticación."
+
+msgid "Restart Aoide Backend"
+msgstr "Reiniciar el servicio de Aoide"
+
+msgid "The backend is reloading speech models."
+msgstr "El servicio está recargando los modelos de voz."
+
+msgid "Key saved to the desktop password wallet."
+msgstr "Clave guardada en el almacén de contraseñas del escritorio."
+
+msgid "Key removed from the desktop password wallet."
+msgstr "Clave eliminada del almacén de contraseñas del escritorio."
+
+msgid "Canonical terms guide recognition; aliases are replaced with canonical spellings during cleanup. Separate aliases with commas or new lines."
+msgstr "Los términos preferidos orientan el reconocimiento; los alias se sustituyen por esos términos durante la revisión. Separa los alias con comas o saltos de línea."
+
+msgid "Search terms or aliases"
+msgstr "Buscar términos o alias"
+
+msgid "The dictionary is empty. Add a term you use often."
+msgstr "El diccionario está vacío. Añade un término que uses con frecuencia."
+
+msgid "Add Term"
+msgstr "Añadir término"
+
+msgid "Remove Selected"
+msgstr "Eliminar selección"
+
+msgid "Save Dictionary"
+msgstr "Guardar diccionario"
+
+msgid "Fcitx5 manages the shortcut, microphone, preview size, speech provider, and cleanup model. Open Input Method settings, then Add-ons → Aoide → Configure."
+msgstr "Fcitx5 gestiona el atajo, el micrófono, el tamaño de la vista previa, el servicio de voz y el modelo de revisión. Abre los ajustes del método de entrada y ve a Complementos → Aoide → Configurar."
+
+msgid "Open KDE Input Method Settings"
+msgstr "Abrir ajustes del método de entrada de KDE"
+
+msgid "OpenAI Speech Recognition"
+msgstr "Reconocimiento de voz de OpenAI"
+
+msgid "ElevenLabs Speech Recognition"
+msgstr "Reconocimiento de voz de ElevenLabs"
+
+msgid "LLM Text Cleanup"
+msgstr "Revisión de texto con IA"
+
+msgid "Enter a new key"
+msgstr "Introduce una clave nueva"
+
+msgid "Save"
+msgstr "Guardar"
+
+msgid "Remove"
+msgstr "Eliminar"
+
+msgid "Not Saved"
+msgstr "No se guardó"
+
+msgid "Enter an API key first."
+msgstr "Introduce primero una clave API."
+
+msgid "Remove Key"
+msgstr "Eliminar clave"
+
+msgid "Remove this key from the desktop password wallet?"
+msgstr "¿Eliminar esta clave del almacén de contraseñas del escritorio?"
+
+msgid "Canonical term"
+msgstr "Término preferido"
+
+msgid "Aliases"
+msgstr "Alias"
+
+msgid "Local socket: "
+msgstr "Socket local: "
+
+msgid "Too Many Terms"
+msgstr "Demasiados términos"
+
+msgid "You can save up to 200 terms."
+msgstr "Puedes guardar hasta 200 términos."
+
+msgid "Dictionary Changed"
+msgstr "El diccionario cambió"
+
+msgid "Another program changed the dictionary. Reopen Settings before saving."
+msgstr "Otro programa cambió el diccionario. Vuelve a abrir la configuración antes de guardarlo."
+
+msgid "Dictionary Too Large"
+msgstr "El diccionario es demasiado grande"
+
+msgid "The dictionary can be at most 64 KiB."
+msgstr "El diccionario puede tener como máximo 64 KiB."
+
+msgid "Dictionary saved; it will apply to the next recording."
+msgstr "Diccionario guardado; se aplicará en la próxima grabación."
+
+msgid " API key"
+msgstr " clave API"
+
+msgid "  ·  Saved"
+msgstr "  ·  Guardada"
+
+msgid "  ·  Not saved"
+msgstr "  ·  No guardada"
+
+msgid "Restart Failed"
+msgstr "No se pudo reiniciar"
+
+msgid "Run aoide-ctl restart, then try voice input again."
+msgstr "Ejecuta aoide-ctl restart y vuelve a probar la entrada de voz."
+
+msgid "Could Not Save Key"
+msgstr "No se pudo guardar la clave"
+
+msgid "Could Not Remove Key"
+msgstr "No se pudo eliminar la clave"
+
+msgid "Could Not Open Settings"
+msgstr "No se pudo abrir la configuración"
+
+msgid "Install KDE System Settings or run fcitx5-configtool."
+msgstr "Instala la configuración del sistema de KDE o ejecuta fcitx5-configtool."
+
+msgid "The dictionary exceeds 64 KiB. Back it up and reduce its size."
+msgstr "El diccionario supera los 64 KiB. Haz una copia de seguridad y reduce su tamaño."
+
+msgid "The dictionary must contain a terms list."
+msgstr "El diccionario debe contener una lista de términos."
+
+msgid "Could Not Read Dictionary"
+msgstr "No se pudo leer el diccionario"
+
+msgid "Invalid Term"
+msgstr "Término no válido"
+
+msgid "Row {row} needs a canonical term of 1–100 characters and up to 20 aliases."
+msgstr "La fila {row} necesita un término preferido de 1 a 100 caracteres y un máximo de 20 alias."
+
+msgid "Could Not Save Dictionary"
+msgstr "No se pudo guardar el diccionario"
+
+msgid "The password wallet could not save the key. Unlock it and try again."
+msgstr "El almacén de contraseñas no pudo guardar la clave. Desbloquéalo e inténtalo de nuevo."
+
+msgid "The password wallet could not remove the key."
+msgstr "El almacén de contraseñas no pudo eliminar la clave."

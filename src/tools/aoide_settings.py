@@ -1,10 +1,12 @@
 """Native Aoide settings for credentials and personal vocabulary."""
 
+import gettext
 import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from functools import lru_cache
 
 import yaml
 from PyQt6.QtCore import Qt
@@ -22,15 +24,25 @@ DICTIONARY = Path.home() / ".config/aoide/dictionary.yaml"
 
 
 def ui_language() -> str:
-    """Use the desktop message locale; a C locale keeps the Chinese default."""
-    locale = (os.environ.get("AOIDE_UI_LANG") or os.environ.get("LC_ALL")
+    """Use the desktop message locale or an explicit Aoide override."""
+    language = (os.environ.get("AOIDE_UI_LANG") or os.environ.get("LC_ALL")
               or os.environ.get("LC_MESSAGES") or os.environ.get("LANGUAGE")
               or os.environ.get("LANG") or "").lower()
-    return "en" if locale.startswith("en") else "zh"
+    if language in ("", "c", "posix"):
+        return "en"
+    return language.split(":", 1)[0].split(".", 1)[0].replace("-", "_")
+
+
+@lru_cache(maxsize=8)
+def translation(language: str) -> gettext.NullTranslations:
+    localedir = os.environ.get("AOIDE_LOCALE_DIR", "/usr/share/locale")
+    return gettext.translation("aoide", localedir=localedir,
+                               languages=[language], fallback=True)
 
 
 def T(chinese: str, english: str) -> str:
-    return english if ui_language() == "en" else chinese
+    language = ui_language()
+    return chinese if language.startswith("zh") else translation(language).gettext(english)
 
 
 class SettingsWindow(QMainWindow):
@@ -271,8 +283,8 @@ class SettingsWindow(QMainWindow):
             aliases = [a.strip() for a in self.table.item(row, 1).text().replace("\n", ",").split(",") if a.strip()]
             if not term or len(term) > 100 or len(aliases) > 20 or any(len(a) > 100 for a in aliases):
                 QMessageBox.warning(self, T("词条无效", "Invalid Term"),
-                                    T(f"第 {row + 1} 行需要 1–100 字的标准写法，最多 20 个别名。",
-                                      f"Row {row + 1} needs a canonical term of 1–100 characters and up to 20 aliases."))
+                                    T("第 {row} 行需要 1–100 字的标准写法，最多 20 个别名。",
+                                      "Row {row} needs a canonical term of 1–100 characters and up to 20 aliases.").format(row=row + 1))
                 return
             entries.append({"term": term, "aliases": aliases})
         stamp = DICTIONARY.stat().st_mtime_ns if DICTIONARY.exists() else None

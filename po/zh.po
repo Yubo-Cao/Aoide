@@ -1,0 +1,109 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Aoide 0.2.0\n"
+"PO-Revision-Date: 2026-09-22 00:00+0000\n"
+"Last-Translator: Aoide contributors\n"
+"Language-Team: Chinese\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: zh\n"
+
+msgid "Hold"
+msgstr "按住"
+
+msgid "Toggle"
+msgstr "切换"
+
+msgid "Local"
+msgstr "本地"
+
+msgid "Cloud"
+msgstr "云端"
+
+msgid "OpenAI batch (default: GPT-Transcribe)"
+msgstr "OpenAI 批量（默认 GPT-Transcribe）"
+
+msgid "OpenAI realtime (default: GPT-Live-Transcribe)"
+msgstr "OpenAI 实时（默认 GPT-Live-Transcribe）"
+
+msgid "ElevenLabs batch (default: Scribe v2)"
+msgstr "ElevenLabs 批量（默认 Scribe v2）"
+
+msgid "ElevenLabs realtime (default: Scribe v2 Realtime)"
+msgstr "ElevenLabs 实时（默认 Scribe v2 Realtime）"
+
+msgid "Push-to-talk key"
+msgstr "语音输入快捷键"
+
+msgid "Trigger mode (hold or toggle)"
+msgstr "触发方式（按住或切换）"
+
+msgid "Check system shortcut conflicts"
+msgstr "检查系统快捷键冲突"
+
+msgid "Backend socket path"
+msgstr "后端连接地址"
+
+msgid "Microphone (blank uses default)"
+msgstr "麦克风设备（留空使用默认设备）"
+
+msgid "Silence timeout (ms)"
+msgstr "语音分段静音时长（毫秒）"
+
+msgid "Live transcript interval (ms)"
+msgstr "实时识别刷新间隔（毫秒）"
+
+msgid "Preview width (columns)"
+msgstr "预览框每行宽度（汉字占两列）"
+
+msgid "Maximum preview lines"
+msgstr "预览框最多显示行数"
+
+msgid "Preview font size (points)"
+msgstr "预览框字号（仅自绘窗口）"
+
+msgid "Enable LLM text cleanup"
+msgstr "启用大模型整理"
+
+msgid "LLM API URL (OpenAI compatible)"
+msgstr "大模型 API 地址（兼容 OpenAI）"
+
+msgid "Legacy key reference"
+msgstr "旧密钥引用"
+
+msgid "LLM model"
+msgstr "大模型名称"
+
+msgid "Cleanup delay (ms)"
+msgstr "开始整理前等待时间（毫秒）"
+
+msgid "Auto-commit delay (ms)"
+msgstr "整理后自动上屏等待时间（毫秒）"
+
+msgid "LLM temperature (0–100; 30 means 0.30)"
+msgstr "大模型温度（0–100，30 表示 0.30）"
+
+msgid "LLM max output tokens"
+msgstr "大模型输出上限（Token）"
+
+msgid "Override cloud YAML"
+msgstr "覆盖 YAML 云端配置"
+
+msgid "Enable cloud recognition"
+msgstr "启用云端语音识别"
+
+msgid "Recognition service and mode"
+msgstr "识别服务与模式"
+
+msgid "Live draft source"
+msgstr "实时草稿来源"
+
+msgid "Legacy cloud key"
+msgstr "旧云端密钥引用"
+
+msgid "Batch model (blank uses YAML)"
+msgstr "批量识别模型（留空沿用 YAML）"
+
+msgid "Realtime model (blank uses YAML)"
+msgstr "实时识别模型（留空沿用 YAML）"

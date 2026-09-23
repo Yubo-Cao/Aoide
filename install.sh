@@ -81,6 +81,14 @@ if [ "$ACTION" = "uninstall" ]; then
             sudo rm -f "$f" && echo "  ✓ Removed $f" && REMOVED=$((REMOVED+1))
         fi
     done
+    for po in "$SCRIPT_DIR"/po/*.po; do
+        [ -f "$po" ] || continue
+        locale="$(basename "$po" .po)"
+        f="/usr/share/locale/$locale/LC_MESSAGES/aoide.mo"
+        if [ -f "$f" ]; then
+            sudo rm -f "$f" && echo "  ✓ Removed $f"
+        fi
+    done
     [ $REMOVED -eq 0 ] && echo "  - No plugin files found"
     echo "  $(hash fcitx5 2>/dev/null && echo '⟹  Run: fcitx5 -r  to reload')"
 
