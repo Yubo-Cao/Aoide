@@ -54,13 +54,13 @@ struct CloudDraftLabels : fcitx::NoAnnotation {
     }
 };
 
-// The enum values are stable config IDs; these are the default models users see.
+// The enum values select vendor and final-transcript route, not a fixed model.
 struct CloudProviderLabels : fcitx::NoAnnotation {
     void dumpDescription(fcitx::RawConfig &config) const {
-        config.setValueByPath("EnumI18n/0", "OpenAI · GPT-Transcribe（批量 / Batch）");
-        config.setValueByPath("EnumI18n/1", "OpenAI · GPT-Live-Transcribe（实时 / Realtime）");
-        config.setValueByPath("EnumI18n/2", "ElevenLabs · Scribe v2（批量 / Batch）");
-        config.setValueByPath("EnumI18n/3", "ElevenLabs · Scribe v2 Realtime（实时 / Realtime）");
+        config.setValueByPath("EnumI18n/0", "OpenAI 批量 / Batch（默认 GPT-Transcribe）");
+        config.setValueByPath("EnumI18n/1", "OpenAI 实时 / Realtime（默认 GPT-Live-Transcribe）");
+        config.setValueByPath("EnumI18n/2", "ElevenLabs 批量 / Batch（默认 Scribe v2）");
+        config.setValueByPath("EnumI18n/3", "ElevenLabs 实时 / Realtime（默认 Scribe v2 Realtime）");
     }
 };
 
@@ -190,7 +190,7 @@ FCITX_CONFIGURATION(AoideConfig,
         this, "CloudASREnabled", "启用云端语音识别 / Enable cloud recognition", false
     };
     fcitx::OptionWithAnnotation<CloudProvider, CloudProviderLabels> cloudASRProvider{
-        this, "CloudASRProvider", "识别模型与模式 / Recognition model and mode", CloudProvider::OpenAI
+        this, "CloudASRProvider", "识别服务与模式 / Recognition service and mode", CloudProvider::OpenAI
     };
     fcitx::OptionWithAnnotation<CloudDraft, CloudDraftLabels> cloudASRDraft{
         this, "CloudASRDraft", "实时草稿来源 / Live draft source", CloudDraft::Local

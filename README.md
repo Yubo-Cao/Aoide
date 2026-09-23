@@ -42,7 +42,9 @@ cd Aoide
 | `~/.config/aoide/config.yaml` | 设置本地模型、降噪、超时等高级参数；模板见 [conf/config.yaml](conf/config.yaml)。 |
 | `~/.config/aoide/dictionary.yaml` | 保存词典中的标准写法和别名；下次录音时自动读取。 |
 
-KDE 设置中的“识别模型与模式”按默认模型显示四个选项：OpenAI 的 **GPT-Transcribe**（批量）和 **GPT-Live-Transcribe**（实时），以及 ElevenLabs 的 **Scribe v2**（批量）和 **Scribe v2 Realtime**（实时）。这里选择服务商及处理方式；“批量识别模型”和“实时识别模型”字段可以覆盖具体模型 ID。原有配置值继续有效。
+KDE 设置中的四个“识别服务与模式”选项决定服务商及终稿处理方式，不是完整的模型目录。默认模型分别是 OpenAI 批量的 **GPT-Transcribe**、OpenAI 实时的 **GPT-Live-Transcribe**、ElevenLabs 批量的 **Scribe v2** 和 ElevenLabs 实时的 **Scribe v2 Realtime**。勾选“覆盖 YAML 云端配置”后，可在“批量识别模型”或“实时识别模型”字段填入同一服务商、同一接口支持的其他模型 ID；留空则沿用 YAML。原有配置值继续有效。
+
+目前批量接口还可配置 OpenAI 的 `gpt-4o-transcribe`、`gpt-4o-mini-transcribe`、`whisper-1`，以及 ElevenLabs 的 `scribe_v2_medical`。这些模型尚未在本项目逐一在线验证；OpenAI 的三个旧模型已[公告将于 2027 年 2 月 26 日停用](https://developers.openai.com/api/docs/deprecations)。ElevenLabs 的其他模型大多用于语音合成或变声，不适用于这里的语音转文字接口。
 
 本地识别在本机运行。启用云端识别后，音频会发给所选服务；启用远程大模型整理后，识别文本及用于衔接的上下文会发给所配置的模型服务。密钥可通过设置窗口存入密码库，旧的 `env:VARIABLE` 配置仍可兼容。
 
