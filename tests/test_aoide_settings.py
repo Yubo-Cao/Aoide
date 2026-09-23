@@ -1,5 +1,6 @@
 """Coverage for Aoide's desktop settings and migration paths."""
 
+import _isolation  # noqa: F401  -- must precede backend imports (no real keys/data)
 import os
 import tempfile
 import unittest

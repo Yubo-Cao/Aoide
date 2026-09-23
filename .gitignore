@@ -36,7 +36,11 @@ Thumbs.db
 
 # Local-only: test assets, dev notes (never commit)
 res/
-tests/
+# tests/: only offline unit tests are tracked; bench/probe/verify/e2e scripts call
+# real providers or read local recordings and stay local.
+tests/*
+!tests/test_*.py
+!tests/_isolation.py
 src/tools/test_pipeline.py
 *.bundle
 /20260719.md

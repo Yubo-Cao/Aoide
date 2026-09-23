@@ -1,4 +1,5 @@
 """Focused checks for dictation cleanup and content safeguards."""
+import _isolation  # noqa: F401  -- must precede backend imports (no real keys/data)
 import tempfile
 import unittest
 from pathlib import Path
