@@ -42,6 +42,8 @@ cd Aoide
 | `~/.config/aoide/config.yaml` | 设置本地模型、降噪、超时等高级参数；模板见 [conf/config.yaml](conf/config.yaml)。 |
 | `~/.config/aoide/dictionary.yaml` | 保存词典中的标准写法和别名；下次录音时自动读取。 |
 
+KDE 设置中的“识别模型与模式”按默认模型显示四个选项：OpenAI 的 **GPT-Transcribe**（批量）和 **GPT-Live-Transcribe**（实时），以及 ElevenLabs 的 **Scribe v2**（批量）和 **Scribe v2 Realtime**（实时）。这里选择服务商及处理方式；“批量识别模型”和“实时识别模型”字段可以覆盖具体模型 ID。原有配置值继续有效。
+
 本地识别在本机运行。启用云端识别后，音频会发给所选服务；启用远程大模型整理后，识别文本及用于衔接的上下文会发给所配置的模型服务。密钥可通过设置窗口存入密码库，旧的 `env:VARIABLE` 配置仍可兼容。
 
 后端 socket 默认位于 `$XDG_RUNTIME_DIR/aoide/backend.sock`。从旧版升级时，安装脚本会迁移用户配置和词典；旧配置里的 `/tmp/yuhuang-backend.sock` 会映射到新地址。命令入口和用户服务分别为 `aoide-ctl`、`aoide-backend` 和 `aoide-backend.service`。

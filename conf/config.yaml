@@ -113,8 +113,8 @@ llm:
 cloud_asr:
   enabled: false
   # Final transcript source:
-  #   openai               GPT Transcribe on VAD segments after release (batch)
-  #   openai-realtime      final from the OpenAI Realtime session (lowest latency)
+  #   openai               GPT-Transcribe on VAD segments after release (batch)
+  #   openai-realtime      GPT-Live-Transcribe via the OpenAI Realtime session
   #   elevenlabs           ElevenLabs Scribe v2 on VAD segments (batch)
   #   elevenlabs-realtime  final from the Scribe v2 Realtime session
   provider: openai
