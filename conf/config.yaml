@@ -74,6 +74,9 @@ asr:
   intermediate_interval: 0.3
   # Compute device: "cuda" (auto-detect GPU 0), "cuda:1" (GPU 1), "mps" (Apple GPU), "cpu"
   device: cuda
+  # false: load no local model at all (no GPU memory); drafts and finals come
+  # from cloud_asr only, and a cloud failure produces no text.
+  local: true
 
 # LLM optimization settings (overridable by fcitx5 GUI)
 llm:

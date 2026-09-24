@@ -188,27 +188,31 @@ def main():
                     cloud_denoiser.mode)
 
     # ASR engine
-    logger.info("Loading ASR models...")
-    try:
-        asr_engine = ASREngine(
-            online_model=asr_config.get("online_model", "paraformer-zh-streaming"),
-            offline_model=asr_config.get("offline_model",
-                "damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"),
-            vad_model=asr_config.get("vad_model", "fsmn-vad"),
-            punc_model=asr_config.get("punc_model", "ct-punc"),
-            sense_voice_model=asr_config.get("sense_voice_model",
-                                             "iic/SenseVoiceSmall"),
-            language=asr_config.get("language", "auto"),
-            sample_rate=audio_config.get("sample_rate", 16000),
-            intermediate_interval=asr_config.get("intermediate_interval", 0.3),
-            device=asr_config.get("device", "cuda"),
-            final_on_release=release_only,
-        )
-        logger.info("ASR models loaded successfully")
-    except Exception as e:
-        logger.error(f"Failed to load ASR models: {e}")
-        logger.info("Continuing without ASR - mock mode")
-        asr_engine = None
+    asr_engine = None
+    if not asr_config.get("local", True):
+        logger.info("Local ASR disabled (asr.local: false); cloud recognition only")
+    else:
+        logger.info("Loading ASR models...")
+        try:
+            asr_engine = ASREngine(
+                online_model=asr_config.get("online_model", "paraformer-zh-streaming"),
+                offline_model=asr_config.get("offline_model",
+                    "damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"),
+                vad_model=asr_config.get("vad_model", "fsmn-vad"),
+                punc_model=asr_config.get("punc_model", "ct-punc"),
+                sense_voice_model=asr_config.get("sense_voice_model",
+                                                 "iic/SenseVoiceSmall"),
+                language=asr_config.get("language", "auto"),
+                sample_rate=audio_config.get("sample_rate", 16000),
+                intermediate_interval=asr_config.get("intermediate_interval", 0.3),
+                device=asr_config.get("device", "cuda"),
+                final_on_release=release_only,
+            )
+            logger.info("ASR models loaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to load ASR models: {e}")
+            logger.info("Continuing without ASR - mock mode")
+            asr_engine = None
 
     # LLM optimizer (initially disabled, enabled by fcitx5 config)
     llm_optimizer = None
